@@ -8,14 +8,14 @@ using Zenject;
 
 /// <summary>
 /// HTTP-клиент на базе UnityWebRequest + UniTask.
-/// 
+///
+/// Важно: UniTask бросает UnityWebRequestException для ЛЮБЫХ HTTP-ошибок (4xx, 5xx).
+/// Мы перехватываем ProtocolError (сервер ответил, но с ошибкой) и читаем тело.
+/// ConnectionError (сервер недоступен) — не перехватываем, летит наверх как есть.
+///
 /// Логика 401:
-///   — Если эндпоинт НЕ авторизационный и это первая попытка:
-///     1. Ждём SemaphoreSlim (только один поток делает refresh за раз)
-///     2. Если токен уже обновился пока ждали — просто повторяем запрос
-///     3. Иначе делаем POST /api/auth/refresh, сохраняем новые токены
-///     4. Повторяем оригинальный запрос с новым токеном
-///   — Если refresh вернул 401/403 — очищаем токены, кидаем SessionExpired
+///   — Если эндпоинт НЕ авторизационный и это первая попытка → тихий refresh → повтор
+///   — Если refresh вернул 401/403 → SessionExpired → Auth-сцена
 /// </summary>
 public class ApiClient : IApiClient
 {
@@ -71,7 +71,6 @@ public class ApiClient : IApiClient
         CancellationToken ct,
         bool isRetry = false)
     {
-        // Запоминаем токен до запроса — нужен для детекции "обновился ли токен пока ждали"
         var staleToken = mTokenStorage.GetAccessToken();
 
         using var request = BuildRequest(method, endpoint, body);
@@ -79,12 +78,12 @@ public class ApiClient : IApiClient
         if (!string.IsNullOrEmpty(staleToken))
             request.SetRequestHeader("Authorization", $"Bearer {staleToken}");
 
-        await request.SendWebRequest().WithCancellation(ct);
+        await SendRequestAsync(request, ct);
 
         var statusCode = (int)request.responseCode;
         var responseText = request.downloadHandler?.text ?? string.Empty;
 
-        // 401 на не-авторизационном эндпоинте и первая попытка → пробуем refresh
+        // 401 на не-авторизационном эндпоинте → тихий refresh → повтор
         if (statusCode == 401 && !isRetry && !IsAuthEndpoint(endpoint))
         {
             await EnsureTokenRefreshedAsync(staleToken, ct);
@@ -98,6 +97,24 @@ public class ApiClient : IApiClient
     }
 
     /// <summary>
+    /// Отправляет запрос. Перехватывает ProtocolError (4xx/5xx) — сервер ответил,
+    /// просто с кодом ошибки. ConnectionError и прочие летят наверх.
+    /// </summary>
+    private static async UniTask SendRequestAsync(UnityWebRequest request, CancellationToken ct)
+    {
+        try
+        {
+            await request.SendWebRequest().WithCancellation(ct);
+        }
+        catch (UnityWebRequestException) when
+            (request.result == UnityWebRequest.Result.ProtocolError)
+        {
+            // Сервер ответил с 4xx/5xx — читаем статус и тело ниже в ExecuteAsync
+        }
+        // ConnectionError / DataProcessingError — не ловим, летят как есть
+    }
+
+    /// <summary>
     /// Обновляет токен если он ещё не был обновлён параллельным запросом.
     /// SemaphoreSlim гарантирует что только один поток делает refresh за раз.
     /// </summary>
@@ -106,7 +123,7 @@ public class ApiClient : IApiClient
         await mRefreshLock.WaitAsync(ct);
         try
         {
-            // Токен уже обновился пока мы стояли в очереди — просто выходим
+            // Токен уже обновился пока мы стояли в очереди
             if (mTokenStorage.GetAccessToken() != staleToken)
                 return;
 
@@ -118,7 +135,6 @@ public class ApiClient : IApiClient
         }
     }
 
-    /// <summary>Делает запрос refresh напрямую, минуя ExecuteAsync (чтобы не зациклиться).</summary>
     private async UniTask DoRefreshAsync(CancellationToken ct)
     {
         var refreshToken = mTokenStorage.GetRefreshToken();
@@ -132,7 +148,7 @@ public class ApiClient : IApiClient
         var body = Serialize(new { refreshToken });
         using var request = BuildRequest("POST", "/api/auth/refresh", body);
 
-        await request.SendWebRequest().WithCancellation(ct);
+        await SendRequestAsync(request, ct);
 
         var statusCode = (int)request.responseCode;
         var responseText = request.downloadHandler?.text ?? string.Empty;
@@ -167,7 +183,6 @@ public class ApiClient : IApiClient
         }
 
 #if UNITY_EDITOR || DEV_BUILD
-        // Принимаем self-signed сертификат на localhost в дев-режиме
         request.certificateHandler = new AcceptAllCertificates();
 #endif
 
@@ -178,7 +193,6 @@ public class ApiClient : IApiClient
 
     private static bool IsSuccess(int code) => code >= 200 && code < 300;
 
-    /// <summary>Авторизационные эндпоинты не тригерят авто-refresh при 401.</summary>
     private static bool IsAuthEndpoint(string endpoint) =>
         endpoint.StartsWith("/api/auth/", StringComparison.OrdinalIgnoreCase);
 
@@ -189,16 +203,14 @@ public class ApiClient : IApiClient
         catch { return "Неизвестная ошибка"; }
     }
 
-    private static string Serialize(object obj) =>
-        JsonConvert.SerializeObject(obj);
-
+    private static string Serialize(object obj) => JsonConvert.SerializeObject(obj);
     private static T Deserialize<T>(string json)
     {
         if (string.IsNullOrWhiteSpace(json)) return default;
         return JsonConvert.DeserializeObject<T>(json);
     }
 
-    // ─── Внутренние DTO ──────────────────────────────────────────────────────
+    // ─── Внутренние типы ─────────────────────────────────────────────────────
 
     [Serializable]
     private class RefreshResponse
@@ -208,7 +220,7 @@ public class ApiClient : IApiClient
     }
 
 #if UNITY_EDITOR || DEV_BUILD
-    private sealed class AcceptAllCertificates : UnityEngine.Networking.CertificateHandler
+    private sealed class AcceptAllCertificates : CertificateHandler
     {
         protected override bool ValidateCertificate(byte[] certificateData) => true;
     }
