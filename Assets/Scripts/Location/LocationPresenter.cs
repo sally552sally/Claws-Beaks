@@ -7,7 +7,7 @@ using Zenject;
 
 /// <summary>
 /// Presenter экрана текущей локации (Game-сцена).
-/// Управляет реактивным состоянием: название, уровень, соседи, таймер перехода.
+/// Управляет реактивным состоянием: название, уровень, соседи, мобы, игроки, таймер перехода.
 ///
 /// БЕЗОПАСНОСТЬ:
 ///   — CanMove берётся строго с сервера, не вычисляется на клиенте.
@@ -31,23 +31,27 @@ public class LocationPresenter : DisposableObject, IInitializable
 
     // ─── Реактивное состояние (Presenter → View) ──────────────────────────────
 
-    private readonly Reactive<string>                   mLocationName  = new(string.Empty);
-    private readonly Reactive<int>                      mLocationLevel = new(0);
-    private readonly Reactive<bool>                     mCanMove       = new(false);
-    private readonly Reactive<string>                   mTimerText     = new(string.Empty);
-    private readonly Reactive<bool>                     mIsLoading     = new(false);
-    private readonly Reactive<string>                   mErrorMessage  = new(string.Empty);
-    private readonly Reactive<List<NeighborDto>>        mNeighbors     = new(new List<NeighborDto>());
-    private readonly Reactive<List<DungeonEntranceDto>> mDungeons      = new(new List<DungeonEntranceDto>());
+    private readonly Reactive<string> mLocationName = new(string.Empty);
+    private readonly Reactive<int> mLocationLevel = new(0);
+    private readonly Reactive<bool> mCanMove = new(false);
+    private readonly Reactive<string> mTimerText = new(string.Empty);
+    private readonly Reactive<bool> mIsLoading = new(false);
+    private readonly Reactive<string> mErrorMessage = new(string.Empty);
+    private readonly Reactive<List<NeighborDto>> mNeighbors = new(new List<NeighborDto>());
+    private readonly Reactive<List<DungeonEntranceDto>> mDungeons = new(new List<DungeonEntranceDto>());
+    private readonly Reactive<List<MobSpawnDto>> mMobs = new(new List<MobSpawnDto>());
+    private readonly Reactive<List<PlayerInLocationDto>> mPlayers = new(new List<PlayerInLocationDto>());
 
-    public ReadonlyReactive<string>                   LocationName  => mLocationName.Readonly;
-    public ReadonlyReactive<int>                      LocationLevel => mLocationLevel.Readonly;
-    public ReadonlyReactive<bool>                     CanMove       => mCanMove.Readonly;
-    public ReadonlyReactive<string>                   TimerText     => mTimerText.Readonly;
-    public ReadonlyReactive<bool>                     IsLoading     => mIsLoading.Readonly;
-    public ReadonlyReactive<string>                   ErrorMessage  => mErrorMessage.Readonly;
-    public ReadonlyReactive<List<NeighborDto>>        Neighbors     => mNeighbors.Readonly;
-    public ReadonlyReactive<List<DungeonEntranceDto>> Dungeons      => mDungeons.Readonly;
+    public ReadonlyReactive<string> LocationName => mLocationName.Readonly;
+    public ReadonlyReactive<int> LocationLevel => mLocationLevel.Readonly;
+    public ReadonlyReactive<bool> CanMove => mCanMove.Readonly;
+    public ReadonlyReactive<string> TimerText => mTimerText.Readonly;
+    public ReadonlyReactive<bool> IsLoading => mIsLoading.Readonly;
+    public ReadonlyReactive<string> ErrorMessage => mErrorMessage.Readonly;
+    public ReadonlyReactive<List<NeighborDto>> Neighbors => mNeighbors.Readonly;
+    public ReadonlyReactive<List<DungeonEntranceDto>> Dungeons => mDungeons.Readonly;
+    public ReadonlyReactive<List<MobSpawnDto>> Mobs => mMobs.Readonly;
+    public ReadonlyReactive<List<PlayerInLocationDto>> Players => mPlayers.Readonly;
 
     // ─── Внутреннее состояние ─────────────────────────────────────────────────
 
@@ -69,11 +73,10 @@ public class LocationPresenter : DisposableObject, IInitializable
     {
         mLocationService = locationService;
 
-        // Все Reactive-поля уничтожаются вместе с Presenter
         AutoDispose(
             mLocationName, mLocationLevel, mCanMove,
             mTimerText, mIsLoading, mErrorMessage,
-            mNeighbors, mDungeons);
+            mNeighbors, mDungeons, mMobs, mPlayers);
     }
 
     // ─── IInitializable ───────────────────────────────────────────────────────
@@ -91,11 +94,13 @@ public class LocationPresenter : DisposableObject, IInitializable
 
     /// <summary>
     /// Обновить данные текущей локации с сервера.
-    /// Вызывается при инициализации, после перехода и вручную (DEV_BUILD кнопка).
+    /// Вызывается при инициализации, после перехода, при открытии Panel_Hunting,
+    /// и вручную (DEV_BUILD кнопка).
+    /// TD-11: убрать DEV_BUILD кнопку в Фазе 5, заменить на SignalR push.
     /// </summary>
     public async UniTask RefreshAsync(CancellationToken ct)
     {
-        mIsLoading.Value    = true;
+        mIsLoading.Value = true;
         mErrorMessage.Value = string.Empty;
 
         try
@@ -128,17 +133,14 @@ public class LocationPresenter : DisposableObject, IInitializable
     /// </summary>
     public async UniTask MoveAsync(long targetLocationId, CancellationToken ct)
     {
-        // Быстрая UX-проверка — сервер всё равно валидирует
         if (!mCanMove.Value) return;
 
-        mIsLoading.Value    = true;
+        mIsLoading.Value = true;
         mErrorMessage.Value = string.Empty;
 
         try
         {
             await mLocationService.MoveAsync(targetLocationId, ct);
-
-            // Получаем полную картину новой локации одним запросом
             var response = await mLocationService.GetCurrentAsync(ct);
             ApplyLocationData(response);
         }
@@ -170,12 +172,14 @@ public class LocationPresenter : DisposableObject, IInitializable
     /// </summary>
     private void ApplyLocationData(CurrentLocationResponse response)
     {
-        mLocationName.Value  = response.Name;
+        mLocationName.Value = response.Name;
         mLocationLevel.Value = response.Level;
-        mCanMove.Value       = response.CanMove;
-        mLockedUntilUtc      = response.LockedUntilUtc;
-        mNeighbors.Value     = response.Neighbors ?? new List<NeighborDto>();
-        mDungeons.Value      = response.DungeonEntrances ?? new List<DungeonEntranceDto>();
+        mCanMove.Value = response.CanMove;
+        mLockedUntilUtc = response.LockedUntilUtc;
+        mNeighbors.Value = response.Neighbors ?? new List<NeighborDto>();
+        mDungeons.Value = response.DungeonEntrances ?? new List<DungeonEntranceDto>();
+        mMobs.Value = response.Mobs ?? new List<MobSpawnDto>();
+        mPlayers.Value = response.Players ?? new List<PlayerInLocationDto>();
 
         StopTimer();
 
@@ -205,9 +209,7 @@ public class LocationPresenter : DisposableObject, IInitializable
     /// <summary>
     /// Петля таймера. Считает секунды до LockedUntilUtc (UTC с сервера).
     /// При достижении нуля → GetCurrentAsync → обновляем CanMove с сервера.
-    ///
-    /// Не даём пользователю нажать переход до подтверждения сервера.
-    /// Таймер — только UX, не источник истины.
+    /// Кнопки перехода не разблокируются без подтверждения сервера.
     /// </summary>
     private async UniTaskVoid RunTimerAsync(CancellationToken ct)
     {
@@ -217,7 +219,7 @@ public class LocationPresenter : DisposableObject, IInitializable
             {
                 if (!mLockedUntilUtc.HasValue) break;
 
-                var remaining   = mLockedUntilUtc.Value - DateTime.UtcNow;
+                var remaining = mLockedUntilUtc.Value - DateTime.UtcNow;
                 var secondsLeft = (int)Math.Ceiling(remaining.TotalSeconds);
 
                 if (secondsLeft > 0)
@@ -227,22 +229,17 @@ public class LocationPresenter : DisposableObject, IInitializable
                     continue;
                 }
 
-                // Таймер достиг нуля — подтверждаем у сервера
-                // Кнопки остаются заблокированными до ответа сервера
                 mTimerText.Value = "—";
 
                 var response = await mLocationService.GetCurrentAsync(ct);
 
                 if (response.CanMove)
                 {
-                    // Сервер подтвердил — применяем (StopTimer вызовется внутри ApplyLocationData)
                     ApplyLocationData(response);
                     return;
                 }
 
-                // Сервер говорит "ещё нет" — перезапускаем от нового значения
-                // TD: причина — дрейф часов клиента/сервера.
-                //     Решение: синхронизация через /api/time (беклог).
+                // TD: дрейф часов клиента/сервера — решить через /api/time (беклог)
                 mLockedUntilUtc = response.LockedUntilUtc;
 
                 var hasNewTimer = response.LockedUntilUtc.HasValue
@@ -250,14 +247,11 @@ public class LocationPresenter : DisposableObject, IInitializable
 
                 if (!hasNewTimer)
                 {
-                    // Аномальный кейс: сервер CanMove=false, но время не дал
-                    // TD: в PvP это даёт неверную инфу на TIMER_RETRY_DELAY_SECONDS
                     Debug.LogWarning("[LocationPresenter] Сервер: CanMove=false без LockedUntilUtc. " +
                                      $"Retry через {TIMER_RETRY_DELAY_SECONDS}с.");
                     mTimerText.Value = string.Empty;
                     await UniTask.Delay(TimeSpan.FromSeconds(TIMER_RETRY_DELAY_SECONDS), cancellationToken: ct);
                 }
-                // else — цикл пересчитает с обновлённым mLockedUntilUtc
             }
         }
         catch (OperationCanceledException) { }
@@ -287,6 +281,6 @@ public class LocationPresenter : DisposableObject, IInitializable
         StopTimer();
         mLifetimeCts.Cancel();
         mLifetimeCts.Dispose();
-        base.OnDispose(); // стреляет LifeEnd → чистит AutoDispose-подписки
+        base.OnDispose();
     }
 }

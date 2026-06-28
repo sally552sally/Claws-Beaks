@@ -7,11 +7,12 @@ using Zenject;
 /// LocationPresenter биндится через BindInterfacesAndSelfTo:
 ///   — IInitializable → Zenject вызовет Initialize() автоматически после инъекций
 ///   — IDisposable    → Zenject вызовет Dispose() при выгрузке сцены
-///   — LocationPresenter (self) → можно инжектить по конкретному типу во View
+///   — LocationPresenter (self) → инжектится во View_Location и View_Hunting
 /// </summary>
 public class GameInstaller : MonoInstaller
 {
     [SerializeField] private View_Location mLocationView;
+    [SerializeField] private View_Hunting mHuntingView;
 
     public override void InstallBindings()
     {
@@ -27,9 +28,13 @@ public class GameInstaller : MonoInstaller
             .AsSingle()
             .NonLazy();
 
-        // View — инстанс из сцены
+        // Views — инстансы из сцены
         Container.Bind<View_Location>()
             .FromInstance(mLocationView)
+            .AsSingle();
+
+        Container.Bind<View_Hunting>()
+            .FromInstance(mHuntingView)
             .AsSingle();
     }
 }
