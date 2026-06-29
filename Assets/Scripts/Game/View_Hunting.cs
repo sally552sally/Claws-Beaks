@@ -7,22 +7,10 @@ using Zenject;
 
 /// <summary>
 /// Экран охоты — Panel_Hunting.
-/// Показывает мобов (вид сверху, блуждают по зоне) и список игроков в локации.
+/// Видимость управляется извне через View_Location (который слушает LocationPresenter.IsHuntingOpen).
+/// Кнопка «Назад» вызывает LocationPresenter.CloseHunting().
 ///
-/// Обновление данных:
-///   — при открытии панели из View_Location → LocationPresenter.RefreshAsync()
-///   — подписывается на LocationPresenter.Mobs и LocationPresenter.Players
-///   — DEV_BUILD кнопка «Обновить» — TD-11: убрать в Фазе 5, заменить на SignalR push
-///
-/// Мёртвые мобы (state == "dead") не отображаются.
-/// SignalR появление/исчезновение мобов — Фаза 5.
-///
-/// Структура ScrollRect:
-///   ScrollRect
-///   └── Viewport
-///       └── Content (VerticalLayoutGroup + ContentSizeFitter)
-///           ├── MobsSection (Header + MobsArea с абсолютными позициями мобов)
-///           └── PlayersSection (Header + PlayersContainer)
+/// Обновление данных происходит при открытии охоты (View_Location.OnHuntingStateChanged).
 ///
 /// GameObject: Panel_Hunting
 /// </summary>
@@ -31,7 +19,6 @@ public class View_Hunting : DisposableBehaviour
     // ─── Мобы ─────────────────────────────────────────────────────────────────
 
     [Header("Мобы")]
-    /// <summary>Зона блуждания мобов. Мобы спавнятся внутри неё с абсолютными позициями.</summary>
     [SerializeField] private RectTransform mMobsArea;
     [SerializeField] private MobView       mMobViewPrefab;
 
@@ -51,6 +38,12 @@ public class View_Hunting : DisposableBehaviour
     [Header("Конфиг")]
     [SerializeField] private HuntingConfig mHuntingConfig;
 
+    // ─── Навигация ────────────────────────────────────────────────────────────
+
+    [Header("Навигация")]
+    /// <summary>Кнопка «← Назад» — возвращает в Panel_LocationMain.</summary>
+    [SerializeField] private Button mButtonBack;
+
     // ─── DEV ──────────────────────────────────────────────────────────────────
 
 #if DEV_BUILD
@@ -61,6 +54,7 @@ public class View_Hunting : DisposableBehaviour
     // ─── Внутренний стейт ─────────────────────────────────────────────────────
 
     private LocationPresenter mPresenter;
+    private CombatPresenter   mCombatPresenter;
 
     private readonly List<MobView>        mMobViews    = new();
     private readonly List<PlayerListItem> mPlayerItems = new();
@@ -68,16 +62,17 @@ public class View_Hunting : DisposableBehaviour
     // ─── Zenject Inject ───────────────────────────────────────────────────────
 
     [Inject]
-    public void Construct(LocationPresenter presenter)
+    public void Construct(LocationPresenter presenter, CombatPresenter combatPresenter)
     {
-        mPresenter = presenter;
+        mPresenter       = presenter;
+        mCombatPresenter = combatPresenter;
     }
 
     // ─── DisposableBehaviour ──────────────────────────────────────────────────
 
     protected override void SafeAwake()
     {
-        // Подписка на реактивные списки мобов и игроков
+        // Мобы и игроки
         mPresenter.Mobs
             .SubscribeOnValueChanged(RebuildMobs)
             .DisposeWhenLifeEnded(this);
@@ -86,8 +81,12 @@ public class View_Hunting : DisposableBehaviour
             .SubscribeOnValueChanged(RebuildPlayers)
             .DisposeWhenLifeEnded(this);
 
+        // Кнопка «Назад» → закрыть охоту
+        if (mButtonBack != null)
+            mButtonBack.SubscribeOnClick(() => mPresenter.CloseHunting())
+                .DisposeWhenLifeEnded(this);
+
 #if DEV_BUILD
-        // TD-11: убрать кнопку в Фазе 5, заменить на SignalR push из LocationHub
         if (mRefreshButton != null)
             mRefreshButton.SubscribeOnClick(OnRefreshClicked).DisposeWhenLifeEnded(this);
 #endif
@@ -95,11 +94,6 @@ public class View_Hunting : DisposableBehaviour
 
     // ─── Мобы ─────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Пересоздаёт mob view-объекты по актуальным данным с сервера.
-    /// Мёртвые мобы (state == "dead") не отображаются.
-    /// Позиции рандомятся на клиенте — чисто визуал, читерить нечего.
-    /// </summary>
     private void RebuildMobs(List<MobSpawnDto> mobs)
     {
         foreach (var view in mMobViews)
@@ -110,19 +104,16 @@ public class View_Hunting : DisposableBehaviour
 
         foreach (var mob in mobs)
         {
-            // Мёртвые мобы не показываем — они исчезают с экрана
-            // При респавне появятся при следующем рефреше (Фаза 5: SignalR)
             if (mob.State == "dead") continue;
 
             var view = Instantiate(mMobViewPrefab, mMobsArea);
-            view.Setup(mob, mMobsArea, mHuntingConfig);
+            view.Setup(mob, mMobsArea, mHuntingConfig, OnMobAttackClicked);
             mMobViews.Add(view);
         }
     }
 
     // ─── Игроки ───────────────────────────────────────────────────────────────
 
-    /// <summary>Пересоздаёт список игроков в локации.</summary>
     private void RebuildPlayers(List<PlayerInLocationDto> players)
     {
         foreach (var item in mPlayerItems)
@@ -141,6 +132,11 @@ public class View_Hunting : DisposableBehaviour
 
     // ─── Обработчики ──────────────────────────────────────────────────────────
 
+    private void OnMobAttackClicked(long spawnId)
+    {
+        mCombatPresenter.EngageMobAsync(spawnId, destroyCancellationToken).Forget();
+    }
+
     private void OnPlayerInfoClicked(PlayerInLocationDto player, Vector2 screenPosition)
     {
         mContextMenuPopup.Show(player, screenPosition);
@@ -149,7 +145,6 @@ public class View_Hunting : DisposableBehaviour
 #if DEV_BUILD
     private void OnRefreshClicked()
     {
-        // TD-11: убрать в Фазе 5 — заменить на SignalR push из LocationHub
         mPresenter.RefreshAsync(destroyCancellationToken).Forget();
     }
 #endif
