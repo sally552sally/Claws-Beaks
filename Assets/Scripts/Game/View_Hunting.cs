@@ -43,6 +43,8 @@ public class View_Hunting : DisposableBehaviour
     [Header("Навигация")]
     /// <summary>Кнопка «← Назад» — возвращает в Panel_LocationMain.</summary>
     [SerializeField] private Button mButtonBack;
+    /// <summary>Кнопка «Инвентарь» — открывает Panel_Inventory поверх охоты.</summary>
+    [SerializeField] private Button mButtonInventory;
 
     // ─── DEV ──────────────────────────────────────────────────────────────────
 
@@ -55,6 +57,7 @@ public class View_Hunting : DisposableBehaviour
 
     private LocationPresenter mPresenter;
     private CombatPresenter   mCombatPresenter;
+    private InventoryPresenter mInventoryPresenter;
 
     private readonly List<MobView>        mMobViews    = new();
     private readonly List<PlayerListItem> mPlayerItems = new();
@@ -62,10 +65,12 @@ public class View_Hunting : DisposableBehaviour
     // ─── Zenject Inject ───────────────────────────────────────────────────────
 
     [Inject]
-    public void Construct(LocationPresenter presenter, CombatPresenter combatPresenter)
+    public void Construct(LocationPresenter presenter, CombatPresenter combatPresenter,
+        InventoryPresenter inventoryPresenter)
     {
         mPresenter       = presenter;
         mCombatPresenter = combatPresenter;
+        mInventoryPresenter = inventoryPresenter;
     }
 
     // ─── DisposableBehaviour ──────────────────────────────────────────────────
@@ -84,6 +89,11 @@ public class View_Hunting : DisposableBehaviour
         // Кнопка «Назад» → закрыть охоту
         if (mButtonBack != null)
             mButtonBack.SubscribeOnClick(() => mPresenter.CloseHunting())
+                .DisposeWhenLifeEnded(this);
+
+        // Кнопка «Инвентарь» → открыть Panel_Inventory поверх охоты
+        if (mButtonInventory != null)
+            mButtonInventory.SubscribeOnClick(() => mInventoryPresenter.Open())
                 .DisposeWhenLifeEnded(this);
 
 #if DEV_BUILD

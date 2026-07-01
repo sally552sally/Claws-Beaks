@@ -40,6 +40,8 @@ public class View_Location : DisposableBehaviour
     [Header("Навигация")]
     [SerializeField] private Button mHuntButton;
     [SerializeField] private Button mMapButton;
+    /// <summary>Кнопка «Инвентарь» — открывает Panel_Inventory поверх локации.</summary>
+    [SerializeField] private Button mInventoryButton;
 
     /// <summary>
     /// Основной контент локации (название, соседи, кнопки).
@@ -63,14 +65,16 @@ public class View_Location : DisposableBehaviour
     // ─── Внутренний стейт ─────────────────────────────────────────────────────
 
     private LocationPresenter mPresenter;
+    private InventoryPresenter mInventoryPresenter;
     private readonly List<NeighborButtonView> mNeighborButtons = new();
 
     // ─── Zenject Inject ───────────────────────────────────────────────────────
 
     [Inject]
-    public void Construct(LocationPresenter presenter)
+    public void Construct(LocationPresenter presenter, InventoryPresenter inventoryPresenter)
     {
         mPresenter = presenter;
+        mInventoryPresenter = inventoryPresenter;
     }
 
     // ─── DisposableBehaviour ──────────────────────────────────────────────────
@@ -131,6 +135,10 @@ public class View_Location : DisposableBehaviour
     {
         mHuntButton.SubscribeOnClick(OnHuntClicked).DisposeWhenLifeEnded(this);
         mMapButton.SubscribeOnClick(OnMapClicked).DisposeWhenLifeEnded(this);
+
+        if (mInventoryButton != null)
+            mInventoryButton.SubscribeOnClick(() => mInventoryPresenter.Open())
+                .DisposeWhenLifeEnded(this);
 
 #if DEV_BUILD
         if (mRefreshButton != null)
