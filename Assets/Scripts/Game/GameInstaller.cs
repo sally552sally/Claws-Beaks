@@ -15,10 +15,15 @@ public class GameInstaller : MonoInstaller
     [SerializeField] private View_Combat        mCombatView;
     [SerializeField] private Popup_CombatResult mCombatResultPopup;
 
+    [Header("Инвентарь")]
+    [SerializeField] private View_Inventory   mInventoryView;
+    [SerializeField] private Popup_ItemDetail mItemDetailPopup;
+
     public override void InstallBindings()
     {
         InstallLocation();
         InstallCombat();
+        InstallInventory();
     }
 
     // ─── Локация ──────────────────────────────────────────────────────────────
@@ -62,6 +67,29 @@ public class GameInstaller : MonoInstaller
 
         Container.Bind<Popup_CombatResult>()
             .FromInstance(mCombatResultPopup)
+            .AsSingle();
+    }
+
+    // ─── Инвентарь ──────────────────────────────────────────────────────────────
+
+    private void InstallInventory()
+    {
+        Container.Bind<IInventoryService>()
+            .To<InventoryService>()
+            .AsSingle();
+
+        // NonLazy: Initialize() подписывается на CombatPresenter.IsInCombat
+        // (авто-закрытие инвентаря, если стартовал бой).
+        Container.BindInterfacesAndSelfTo<InventoryPresenter>()
+            .AsSingle()
+            .NonLazy();
+
+        Container.Bind<View_Inventory>()
+            .FromInstance(mInventoryView)
+            .AsSingle();
+
+        Container.Bind<Popup_ItemDetail>()
+            .FromInstance(mItemDetailPopup)
             .AsSingle();
     }
 }
