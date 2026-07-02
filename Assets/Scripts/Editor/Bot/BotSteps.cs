@@ -7,6 +7,7 @@ using UnityEngine;
 /// <summary>
 /// Один шаг сценария. Реализация читает всё нужное из BotContext (в т.ч. токен отмены ctx.Ct).
 /// Добавить новую операцию боту = добавить класс-шаг сюда + метод в BotScenarioBuilder.
+/// Если шаг может проверить себя до запуска — дополнительно реализуй IBotStepValidator.
 /// </summary>
 public interface IBotStep
 {
@@ -16,10 +17,30 @@ public interface IBotStep
     UniTask ExecuteAsync(BotContext ctx);
 }
 
+/// <summary>Общий помощник для проверок (ассертов): статистика, лог, скриншот при провале.</summary>
+public static class BotAssert
+{
+    public static void Report(BotContext ctx, bool passed, string what, string failDetail)
+    {
+        if (passed)
+        {
+            ctx.Stats.AssertsPassed++;
+            ctx.Log.Info(BotChannel.Assert, $"✓ {what}");
+        }
+        else
+        {
+            ctx.Stats.AssertsFailed++;
+            ctx.Log.Error(BotChannel.Assert, $"✗ {what} — {failDetail}");
+            if (ctx.Options.ScreenshotOnError)
+                ctx.CaptureScreenshot("assert");
+        }
+    }
+}
+
 // ─── Навигация ──────────────────────────────────────────────────────────────────
 
 /// <summary>Дойти до локации по её коду (путь строится сам по карте).</summary>
-public sealed class GoToStep : IBotStep
+public sealed class GoToStep : IBotStep, IBotStepValidator
 {
     private readonly string mCode;
     public GoToStep(string code) => mCode = code;
@@ -30,13 +51,26 @@ public sealed class GoToStep : IBotStep
         // GoToAsync сам логирует, дошли/не дошли; bool здесь не нужен.
         await NavigationOps.GoToAsync(ctx, mCode);
     }
+
+    public UniTask<string> ValidateAsync(BotDryRunState state)
+    {
+        if (!state.LocationExists(mCode))
+            return UniTask.FromResult($"локации «{mCode}» нет на карте (опечатка в коде?)");
+
+        if (!state.PathExists(state.SimulatedLocationCode, mCode))
+            return UniTask.FromResult($"нет пути из «{state.SimulatedLocationCode}» до «{mCode}»");
+
+        state.SimulatedLocationCode = mCode; // двигаем симуляцию для следующих шагов
+        return UniTask.FromResult<string>(null);
+    }
 }
 
 // ─── Бой ────────────────────────────────────────────────────────────────────────
 
 /// <summary>
 /// Убить N мобов в текущей локации. Сам ждёт респавн, если живых мобов нет.
-/// При смерти (воскрешение в городе) фарм в этой локации прерывается с логом.
+/// При смерти (воскрешение в городе) фарм в этой локации прерывается с логом;
+/// если включено «стоп при смерти» — запрашивается остановка всего прогона.
 /// </summary>
 public sealed class KillMobsStep : IBotStep
 {
@@ -60,15 +94,17 @@ public sealed class KillMobsStep : IBotStep
 
         int killed = 0;
         int rejectedInARow = 0;
+        ctx.Progress.Detail = $"0/{mCount}";
 
         while (killed < mCount)
         {
             ctx.Ct.ThrowIfCancellationRequested();
+            if (ctx.StopRequested) return;
 
             var mob = await WaitForAliveMobAsync(ctx);
             if (mob == null)
             {
-                ctx.Log.Warn($"Живых мобов нет и респавна не будет — прерываю (убито {killed}/{mCount}).");
+                ctx.Log.Warn(BotChannel.Combat, $"Живых мобов нет и респавна не будет — прерываю (убито {killed}/{mCount}).");
                 break;
             }
 
@@ -79,28 +115,31 @@ public sealed class KillMobsStep : IBotStep
                 case FightOutcome.Win:
                     killed++;
                     rejectedInARow = 0;
-                    ctx.Log.Info($"Прогресс: {killed}/{mCount}.");
+                    ctx.Progress.Detail = $"{killed}/{mCount}";
+                    ctx.Log.Info(BotChannel.Combat, $"Прогресс: {killed}/{mCount}.");
                     break;
 
                 case FightOutcome.Lost:
-                    ctx.Log.Warn("Погиб — воскрешён в городе, фарм в этой локации прерван.");
+                    ctx.Log.Warn(BotChannel.Combat, "Погиб — воскрешён в городе, фарм в этой локации прерван.");
+                    if (ctx.Options.StopOnDeath)
+                        ctx.RequestStop("смерть персонажа (включено «стоп при смерти»)");
                     return;
 
                 case FightOutcome.Rejected:
                     if (++rejectedInARow >= MAX_REJECTED_ATTEMPTS)
                     {
-                        ctx.Log.Warn("Слишком много отказов подряд — прерываю шаг.");
+                        ctx.Log.Warn(BotChannel.Combat, "Слишком много отказов подряд — прерываю шаг.");
                         return;
                     }
                     break;
 
                 case FightOutcome.Timeout:
-                    ctx.Log.Warn("Бой прерван по таймауту — прерываю шаг.");
+                    ctx.Log.Warn(BotChannel.Combat, "Бой прерван по таймауту — прерываю шаг.");
                     return;
             }
         }
 
-        ctx.Log.Info($"Готово: убито {killed}/{mCount}.");
+        ctx.Log.Info(BotChannel.Combat, $"Готово: убито {killed}/{mCount}.");
     }
 
     /// <summary>
@@ -133,13 +172,13 @@ public sealed class KillMobsStep : IBotStep
             var wait = nextRespawn - DateTime.UtcNow;
             if (wait > TimeSpan.Zero)
             {
-                ctx.Log.Info($"Мобы кончились — жду респавн (~{(int)wait.TotalSeconds}с)…");
+                ctx.Log.Info(BotChannel.Combat, $"Мобы кончились — жду респавн (~{(int)wait.TotalSeconds}с)…");
                 await BotWait.UntilForever(
                     () => DateTime.UtcNow >= nextRespawn, ctx.Ct,
                     heartbeat: () =>
                     {
                         var left = (int)(nextRespawn - DateTime.UtcNow).TotalSeconds;
-                        if (left > 0) ctx.Log.Info($"…респавн через {left}с");
+                        if (left > 0) ctx.Log.Info(BotChannel.Combat, $"…респавн через {left}с");
                     });
             }
             // Небольшая пауза и повторный рефреш (сервер должен поднять моба).
@@ -151,21 +190,44 @@ public sealed class KillMobsStep : IBotStep
 // ─── Инвентарь ────────────────────────────────────────────────────────────────
 
 /// <summary>Надеть сет по SetId.</summary>
-public sealed class EquipSetStep : IBotStep
+public sealed class EquipSetStep : IBotStep, IBotStepValidator
 {
     private readonly long mSetId;
     public EquipSetStep(long setId) => mSetId = setId;
     public string Describe => $"Одеть сет #{mSetId}";
     public UniTask ExecuteAsync(BotContext ctx) => InventoryOps.EquipSetAsync(ctx, mSetId);
+
+    public UniTask<string> ValidateAsync(BotDryRunState state)
+    {
+        bool inBackpack = state.Inventory.Backpack.Any(i => i.SetId == mSetId);
+        if (inBackpack) return UniTask.FromResult<string>(null);
+
+        bool equipped = state.Inventory.Equipped.Any(i => i.SetId == mSetId);
+        if (equipped) return UniTask.FromResult<string>(null); // уже надет — не ошибка
+
+        bool inChest = state.Chest?.Items != null && state.Chest.Items.Any(i => i.SetId == mSetId);
+        if (inChest)
+            return UniTask.FromResult($"вещи сета #{mSetId} лежат в сундуке, не в рюкзаке — " +
+                                      "не забудь WithdrawSetFromChest перед этим шагом");
+
+        return UniTask.FromResult($"вещей сета #{mSetId} нет ни в рюкзаке, ни в сундуке");
+    }
 }
 
 /// <summary>Надеть одну вещь по коду.</summary>
-public sealed class EquipItemStep : IBotStep
+public sealed class EquipItemStep : IBotStep, IBotStepValidator
 {
     private readonly string mCode;
     public EquipItemStep(string code) => mCode = code;
     public string Describe => $"Одеть предмет «{mCode}»";
     public UniTask ExecuteAsync(BotContext ctx) => InventoryOps.EquipItemAsync(ctx, mCode);
+
+    public UniTask<string> ValidateAsync(BotDryRunState state)
+    {
+        bool found = state.Inventory.Backpack.Any(i => i.Code == mCode)
+                     || state.Inventory.Equipped.Any(i => i.Code == mCode);
+        return UniTask.FromResult(found ? null : $"предмета «{mCode}» нет в рюкзаке");
+    }
 }
 
 /// <summary>Снять всё надетое в рюкзак.</summary>
@@ -176,21 +238,145 @@ public sealed class UnequipAllStep : IBotStep
 }
 
 /// <summary>Сложить сет в сундук (нужна локация с сундуком).</summary>
-public sealed class DepositSetStep : IBotStep
+public sealed class DepositSetStep : IBotStep, IBotStepValidator
 {
     private readonly long mSetId;
     public DepositSetStep(long setId) => mSetId = setId;
     public string Describe => $"Сет #{mSetId} → в сундук";
     public UniTask ExecuteAsync(BotContext ctx) => InventoryOps.DepositSetToChestAsync(ctx, mSetId);
+
+    public UniTask<string> ValidateAsync(BotDryRunState state)
+    {
+        bool inBackpack = state.Inventory.Backpack.Any(i => i.SetId == mSetId);
+        if (inBackpack) return UniTask.FromResult<string>(null);
+
+        bool equipped = state.Inventory.Equipped.Any(i => i.SetId == mSetId);
+        if (equipped)
+            return UniTask.FromResult($"вещи сета #{mSetId} сейчас надеты — " +
+                                      "перед складыванием нужен UnequipAll");
+
+        bool inChest = state.Chest?.Items != null && state.Chest.Items.Any(i => i.SetId == mSetId);
+        if (inChest) return UniTask.FromResult<string>(null); // уже в сундуке — не ошибка
+
+        return UniTask.FromResult($"вещей сета #{mSetId} нет ни в рюкзаке, ни надетыми");
+    }
 }
 
 /// <summary>Достать сет из сундука (нужна локация с сундуком).</summary>
-public sealed class WithdrawSetStep : IBotStep
+public sealed class WithdrawSetStep : IBotStep, IBotStepValidator
 {
     private readonly long mSetId;
     public WithdrawSetStep(long setId) => mSetId = setId;
     public string Describe => $"Сет #{mSetId} ← из сундука";
     public UniTask ExecuteAsync(BotContext ctx) => InventoryOps.WithdrawSetFromChestAsync(ctx, mSetId);
+
+    public UniTask<string> ValidateAsync(BotDryRunState state)
+    {
+        if (state.Chest == null)
+            return UniTask.FromResult("не могу проверить содержимое сундука из текущей локации " +
+                                      "(сундук здесь недоступен) — проверь SetId вручную");
+
+        bool inChest = state.Chest.Items != null && state.Chest.Items.Any(i => i.SetId == mSetId);
+        if (inChest) return UniTask.FromResult<string>(null);
+
+        bool inBackpack = state.Inventory.Backpack.Any(i => i.SetId == mSetId)
+                          || state.Inventory.Equipped.Any(i => i.SetId == mSetId);
+        if (inBackpack) return UniTask.FromResult<string>(null); // положим этим же сценарием — ок
+
+        return UniTask.FromResult($"вещей сета #{mSetId} нет ни в сундуке, ни у персонажа");
+    }
+}
+
+// ─── Проверки (ассерты) ─────────────────────────────────────────────────────────
+
+/// <summary>Проверить: текущая локация = ожидаемая.</summary>
+public sealed class AssertLocationStep : IBotStep, IBotStepValidator
+{
+    private readonly string mCode;
+    public AssertLocationStep(string code) => mCode = code;
+    public string Describe => $"Проверка: локация = «{mCode}»";
+
+    public async UniTask ExecuteAsync(BotContext ctx)
+    {
+        var current = await ctx.LocationService.GetCurrentAsync(ctx.Ct);
+        BotAssert.Report(ctx, current.Code == mCode, Describe, $"факт: «{current.Code}» ({current.Name})");
+    }
+
+    public UniTask<string> ValidateAsync(BotDryRunState state)
+        => UniTask.FromResult(state.LocationExists(mCode) ? null : $"локации «{mCode}» нет на карте");
+}
+
+/// <summary>
+/// Проверить: надет сет (минимум minItems вещей сета и НИ ОДНОЙ надетой вещи чужого сета;
+/// вещи без сета допускаются).
+/// </summary>
+public sealed class AssertEquippedSetStep : IBotStep
+{
+    private readonly long mSetId;
+    private readonly int mMinItems;
+
+    public AssertEquippedSetStep(long setId, int minItems)
+    {
+        mSetId = setId;
+        mMinItems = minItems;
+    }
+
+    public string Describe => $"Проверка: надет сет #{mSetId} (≥{mMinItems} вещ.)";
+
+    public async UniTask ExecuteAsync(BotContext ctx)
+    {
+        var inv = await ctx.InventoryService.GetInventoryAsync(ctx.Ct);
+        int ours = inv.Equipped.Count(i => i.SetId == mSetId);
+        int foreign = inv.Equipped.Count(i => i.SetId.HasValue && i.SetId != mSetId);
+
+        bool passed = ours >= mMinItems && foreign == 0;
+        BotAssert.Report(ctx, passed, Describe,
+            $"надето вещей сета: {ours}, чужих сетовых вещей: {foreign}");
+    }
+}
+
+/// <summary>Проверить: в рюкзаке есть предмет с кодом.</summary>
+public sealed class AssertBackpackContainsStep : IBotStep
+{
+    private readonly string mCode;
+    public AssertBackpackContainsStep(string code) => mCode = code;
+    public string Describe => $"Проверка: в рюкзаке есть «{mCode}»";
+
+    public async UniTask ExecuteAsync(BotContext ctx)
+    {
+        var inv = await ctx.InventoryService.GetInventoryAsync(ctx.Ct);
+        bool found = inv.Backpack.Any(i => i.Code == mCode);
+        BotAssert.Report(ctx, found, Describe, "предмет не найден");
+    }
+}
+
+/// <summary>Проверить: в сундуке есть вещи сета (требует локацию с сундуком).</summary>
+public sealed class AssertChestContainsStep : IBotStep
+{
+    private readonly long mSetId;
+    public AssertChestContainsStep(long setId) => mSetId = setId;
+    public string Describe => $"Проверка: в сундуке есть сет #{mSetId}";
+
+    public async UniTask ExecuteAsync(BotContext ctx)
+    {
+        ChestResponseDto chest;
+        try { chest = await ctx.InventoryService.GetChestAsync(ctx.Ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            BotAssert.Report(ctx, false, Describe, $"сундук не прочитался: {ex.Message}");
+            return;
+        }
+
+        if (!chest.Available)
+        {
+            BotAssert.Report(ctx, false, Describe, "сундук недоступен в этой локации");
+            return;
+        }
+
+        int count = chest.Items?.Count(i => i.SetId == mSetId) ?? 0;
+        BotAssert.Report(ctx, count > 0, Describe, "вещей сета в сундуке нет");
+    }
 }
 
 // ─── Сервисные ────────────────────────────────────────────────────────────────
@@ -245,6 +431,9 @@ public sealed class RepeatStep : IBotStep
         mSteps = steps;
     }
 
+    /// <summary>Вложенные шаги (нужно сухому прогону для рекурсивного обхода).</summary>
+    public IReadOnlyList<IBotStep> InnerSteps => mSteps;
+
     public string Describe => $"Повторить x{mTimes} ({mSteps.Count} шаг.)";
 
     public async UniTask ExecuteAsync(BotContext ctx)
@@ -252,12 +441,17 @@ public sealed class RepeatStep : IBotStep
         for (int i = 1; i <= mTimes; i++)
         {
             ctx.Ct.ThrowIfCancellationRequested();
-            ctx.Log.Info($"— повтор {i}/{mTimes} —");
+            if (ctx.StopRequested) return;
+
+            ctx.Log.Info(BotChannel.System, $"— повтор {i}/{mTimes} —");
             foreach (var step in mSteps)
             {
                 ctx.Ct.ThrowIfCancellationRequested();
+                if (ctx.StopRequested) return;
+
                 ctx.Log.Step(step.Describe);
                 await step.ExecuteAsync(ctx);
+                await ctx.PauseAfterActionAsync();
             }
         }
     }
@@ -269,6 +463,7 @@ public sealed class RepeatStep : IBotStep
 /// Лёгкая проверка проводки UI: найти GameObject по имени и проверить активность.
 /// Не кликает кнопки (это хрупко) — проверяет, что View отреагировал на команду презентора.
 /// Пример: после открытия инвентаря Panel_Inventory должна стать активной.
+/// Провал считается проваленной проверкой (идёт в статистику ассертов).
 /// </summary>
 public sealed class VerifyPanelStep : IBotStep
 {
@@ -288,16 +483,13 @@ public sealed class VerifyPanelStep : IBotStep
         var go = FindByName(mObjectName);
         if (go == null)
         {
-            ctx.Log.Warn($"UI-смоук: объект «{mObjectName}» не найден в сцене.");
+            BotAssert.Report(ctx, false, Describe, "объект не найден в сцене");
             return UniTask.CompletedTask;
         }
 
         bool active = go.activeInHierarchy;
-        if (active == mShouldBeActive)
-            ctx.Log.Info($"UI-смоук OK: «{mObjectName}» {(active ? "видна" : "скрыта")}.");
-        else
-            ctx.Log.Warn($"UI-смоук FAIL: «{mObjectName}» ожидалась {(mShouldBeActive ? "видимой" : "скрытой")}, " +
-                         $"а она {(active ? "видна" : "скрыта")}.");
+        BotAssert.Report(ctx, active == mShouldBeActive, Describe,
+            $"факт: {(active ? "видна" : "скрыта")}");
 
         return UniTask.CompletedTask;
     }

@@ -8,6 +8,7 @@ using Cysharp.Threading.Tasks;
 /// уважая таймер каждой локации (CanMove с сервера).
 ///
 /// Цель задаётся КОДОМ локации (человекочитаемо), id разруливаем по карте.
+/// Пишет в канал Navigation; после каждого перехода — пауза (если включена).
 /// </summary>
 public static class NavigationOps
 {
@@ -26,28 +27,31 @@ public static class NavigationOps
         var target = map.Locations.FirstOrDefault(l => l.Code == targetCode);
         if (target == null)
         {
-            ctx.Log.Error($"Локация с кодом «{targetCode}» не найдена на карте.");
+            ctx.Log.Error(BotChannel.Navigation, $"Локация с кодом «{targetCode}» не найдена на карте.");
             return false;
         }
 
         if (current.LocationId == target.Id)
         {
-            ctx.Log.Info($"Уже в «{target.Name}».");
+            ctx.Log.Info(BotChannel.Navigation, $"Уже в «{target.Name}».");
             return true;
         }
 
         var path = BuildPath(map, current.LocationId, target.Id);
         if (path == null)
         {
-            ctx.Log.Error($"Нет пути из «{current.Name}» до «{target.Name}».");
+            ctx.Log.Error(BotChannel.Navigation, $"Нет пути из «{current.Name}» до «{target.Name}».");
             return false;
         }
 
-        ctx.Log.Info($"Маршрут до «{target.Name}»: {path.Count} перех.");
+        ctx.Log.Info(BotChannel.Navigation, $"Маршрут до «{target.Name}»: {path.Count} перех.");
 
+        int stepIndex = 0;
         foreach (var nextId in path)
         {
             ct.ThrowIfCancellationRequested();
+            stepIndex++;
+            ctx.Progress.Detail = $"переход {stepIndex}/{path.Count}";
 
             // Ждём, пока можно перейти (таймер локации).
             await WaitUntilCanMoveAsync(ctx);
@@ -60,14 +64,16 @@ public static class NavigationOps
             current = await ctx.LocationService.GetCurrentAsync(ct);
             if (current.LocationId != nextId)
             {
-                ctx.Log.Error($"Переход сорвался: ожидал id={nextId}, оказался в «{current.Name}» " +
-                              $"(вход мог быть закрыт).");
+                ctx.Log.Error(BotChannel.Navigation,
+                    $"Переход сорвался: ожидал id={nextId}, оказался в «{current.Name}» (вход мог быть закрыт).");
                 return false;
             }
 
-            ctx.Log.Info($"→ «{current.Name}».");
+            ctx.Log.Info(BotChannel.Navigation, $"→ «{current.Name}».");
+            await ctx.PauseAfterActionAsync();
         }
 
+        ctx.Progress.Detail = "";
         return true;
     }
 
@@ -76,7 +82,7 @@ public static class NavigationOps
     {
         if (ctx.Location.CanMove.Value) return;
 
-        ctx.Log.Info("Жду таймер локации…");
+        ctx.Log.Info(BotChannel.Navigation, "Жду таймер локации…");
         await BotWait.UntilForever(
             () => ctx.Location.CanMove.Value,
             ctx.Ct,
@@ -84,7 +90,7 @@ public static class NavigationOps
             {
                 var timer = ctx.Location.TimerText.Value;
                 if (!string.IsNullOrEmpty(timer))
-                    ctx.Log.Info($"…до перехода {timer}");
+                    ctx.Log.Info(BotChannel.Navigation, $"…до перехода {timer}");
             });
     }
 

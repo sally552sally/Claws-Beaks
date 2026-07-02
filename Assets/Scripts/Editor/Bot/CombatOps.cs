@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Cysharp.Threading.Tasks;
 
 /// <summary>Чем закончился бой.</summary>
@@ -15,6 +16,9 @@ public enum FightOutcome
 ///
 /// Схема одного хода = язык боя из диздока: опц. расходка → стойка → удар (или пропуск),
 /// затем ждём, пока сервер обработает ход (IsLoading вернётся в false).
+///
+/// Пишет в канал Combat; считает ходы и время боя (BotStats); после каждого действия —
+/// пауза ctx.PauseAfterActionAsync() (если включена в настройках).
 /// </summary>
 public static class CombatOps
 {
@@ -25,11 +29,12 @@ public static class CombatOps
 
         if (combat.IsInCombat.Value)
         {
-            ctx.Log.Warn("Уже в бою — новый бой начать нельзя, пропускаю.");
+            ctx.Log.Warn(BotChannel.Combat, "Уже в бою — новый бой начать нельзя, пропускаю.");
             return FightOutcome.Rejected;
         }
 
         ctx.Stats.Fights++;
+        var stopwatch = Stopwatch.StartNew();
 
         // ── Старт боя ────────────────────────────────────────────────────────
         combat.EngageMobAsync(spawnId, ct).Forget();
@@ -41,12 +46,13 @@ public static class CombatOps
         if (!combat.IsInCombat.Value)
         {
             var err = combat.ErrorMessage.Value;
-            ctx.Log.Warn($"Бой не начался: {(string.IsNullOrEmpty(err) ? "таймаут" : err)}");
+            ctx.Log.Warn(BotChannel.Combat, $"Бой не начался: {(string.IsNullOrEmpty(err) ? "таймаут" : err)}");
             ctx.Stats.Rejections++;
             return FightOutcome.Rejected;
         }
 
-        ctx.Log.Info($"Бой начат против «{combat.EnemyName.Value}».");
+        ctx.Log.Info(BotChannel.Combat, $"Бой начат против «{combat.EnemyName.Value}».");
+        await ctx.PauseAfterActionAsync();
 
         // ── Цикл ходов ───────────────────────────────────────────────────────
         while (combat.IsInCombat.Value && !combat.IsFinished.Value)
@@ -63,8 +69,10 @@ public static class CombatOps
 
             if (!ready)
             {
-                ctx.Log.Warn("Не дождался своего хода (таймаут). Прерываю бой.");
+                ctx.Log.Warn(BotChannel.Combat, "Не дождался своего хода (таймаут). Прерываю бой.");
                 await ForceExitAsync(ctx);
+                stopwatch.Stop();
+                ctx.Stats.FightSeconds += stopwatch.Elapsed.TotalSeconds;
                 return FightOutcome.Timeout;
             }
 
@@ -76,6 +84,7 @@ public static class CombatOps
                 combat.ConsumeAsync(move.ConsumeTemplateId.Value, ct).Forget();
                 await BotWait.Until(() => !combat.IsLoading.Value, BotConfig.TURN_TIMEOUT, ct);
                 if (combat.IsFinished.Value || !combat.IsInCombat.Value) break;
+                await ctx.PauseAfterActionAsync();
             }
 
             // Стойка + удар (или пропуск).
@@ -83,10 +92,14 @@ public static class CombatOps
             if (move.Skip) combat.SkipAsync(ct).Forget();
             else           combat.ActionAsync(move.Direction, ct).Forget();
 
+            ctx.Stats.TotalTurns++;
+
             // Ждём, пока ход обработается (IsLoading вернётся в false), либо конец боя.
             await BotWait.Until(
                 () => combat.IsFinished.Value || !combat.IsInCombat.Value || !combat.IsLoading.Value,
                 BotConfig.TURN_TIMEOUT, ct);
+
+            await ctx.PauseAfterActionAsync();
         }
 
         // ── Итог ─────────────────────────────────────────────────────────────
@@ -95,6 +108,10 @@ public static class CombatOps
         int myHp = combat.MyCurrentHp.Value;
 
         await ForceExitAsync(ctx); // выйти из боя (внутри воскресит, если HP<=0)
+        await ctx.PauseAfterActionAsync();
+
+        stopwatch.Stop();
+        ctx.Stats.FightSeconds += stopwatch.Elapsed.TotalSeconds;
 
         if (!finished)
             return FightOutcome.Timeout;
@@ -103,7 +120,7 @@ public static class CombatOps
         {
             ctx.Stats.Wins++;
             ctx.Stats.MobKills++;
-            ctx.Log.Info("Победа.");
+            ctx.Log.Info(BotChannel.Combat, "Победа.");
             return FightOutcome.Win;
         }
 
@@ -112,11 +129,11 @@ public static class CombatOps
         if (myHp <= 0)
         {
             ctx.Stats.Deaths++;
-            ctx.Log.Warn("Поражение: персонаж погиб и воскрешён в городе.");
+            ctx.Log.Warn(BotChannel.Combat, "Поражение: персонаж погиб и воскрешён в городе.");
             return FightOutcome.Lost;
         }
 
-        ctx.Log.Warn("Поражение.");
+        ctx.Log.Warn(BotChannel.Combat, "Поражение.");
         return FightOutcome.Lost;
     }
 

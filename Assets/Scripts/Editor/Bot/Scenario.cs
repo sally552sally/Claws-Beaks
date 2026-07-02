@@ -100,6 +100,51 @@ public sealed class BotScenarioBuilder
         return this;
     }
 
+
+    // ─── Макросы (частые связки одним словом) ────────────────────────────────
+
+    /// <summary>
+    /// Макрос «переодеться у сундука»: снять всё → сет removeSetId в сундук →
+    /// достать сет wearSetId → надеть его. Требует локацию с сундуком.
+    /// </summary>
+    public BotScenarioBuilder SwapSets(long removeSetId, long wearSetId)
+    {
+        return UnequipAll()
+            .DepositSetToChest(removeSetId)
+            .WithdrawSetFromChest(wearSetId)
+            .EquipSet(wearSetId);
+    }
+
+    // ─── Проверки (ассерты) ───────────────────────────────────────────────────
+
+    /// <summary>Проверить: текущая локация = code. Провал идёт в статистику и лог.</summary>
+    public BotScenarioBuilder AssertLocation(string locationCode)
+    {
+        mSteps.Add(new AssertLocationStep(locationCode));
+        return this;
+    }
+
+    /// <summary>Проверить: надет сет (≥minItems вещей, чужих сетовых вещей нет).</summary>
+    public BotScenarioBuilder AssertEquippedSet(long setId, int minItems = 1)
+    {
+        mSteps.Add(new AssertEquippedSetStep(setId, minItems));
+        return this;
+    }
+
+    /// <summary>Проверить: в рюкзаке есть предмет с кодом.</summary>
+    public BotScenarioBuilder AssertBackpackContains(string code)
+    {
+        mSteps.Add(new AssertBackpackContainsStep(code));
+        return this;
+    }
+
+    /// <summary>Проверить: в сундуке есть вещи сета (нужна локация с сундуком).</summary>
+    public BotScenarioBuilder AssertChestContains(long setId)
+    {
+        mSteps.Add(new AssertChestContainsStep(setId));
+        return this;
+    }
+
     // ─── Сервисные ──────────────────────────────────────────────────────────────
 
     /// <summary>Записать снимок состояния в лог (метка — для читаемости).</summary>

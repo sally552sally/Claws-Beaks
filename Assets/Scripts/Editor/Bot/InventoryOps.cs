@@ -14,7 +14,7 @@ using Cysharp.Threading.Tasks;
 ///     Мутации fire-and-forget → ждём IsLoading=false и читаем ErrorMessage
 ///     (единственный способ узнать, что сервер отклонил операцию).
 ///
-/// Панель инвентаря открываем для наглядности (чтобы игрок видел), но логика на неё не завязана.
+/// Пишет в канал Inventory; после каждой мутации — пауза (если включена).
 /// </summary>
 public static class InventoryOps
 {
@@ -32,7 +32,7 @@ public static class InventoryOps
 
         if (items.Count == 0)
         {
-            ctx.Log.Warn($"В рюкзаке нет вещей сета #{setId} — надевать нечего.");
+            ctx.Log.Warn(BotChannel.Inventory, $"В рюкзаке нет вещей сета #{setId} — надевать нечего.");
             return;
         }
 
@@ -49,7 +49,7 @@ public static class InventoryOps
         var item = inv.Backpack.FirstOrDefault(i => i.Code == code);
         if (item == null)
         {
-            ctx.Log.Warn($"В рюкзаке нет предмета с кодом «{code}».");
+            ctx.Log.Warn(BotChannel.Inventory, $"В рюкзаке нет предмета с кодом «{code}».");
             return;
         }
 
@@ -66,7 +66,7 @@ public static class InventoryOps
         var ids = inv.Equipped.Select(i => (i.InstanceId, i.Name)).ToList();
         if (ids.Count == 0)
         {
-            ctx.Log.Info("Снимать нечего — экипировка пуста.");
+            ctx.Log.Info(BotChannel.Inventory, "Снимать нечего — экипировка пуста.");
             return;
         }
 
@@ -88,7 +88,7 @@ public static class InventoryOps
         var items = inv.Backpack.Where(i => i.SetId == setId).ToList();
         if (items.Count == 0)
         {
-            ctx.Log.Warn($"В рюкзаке нет вещей сета #{setId} — складывать нечего.");
+            ctx.Log.Warn(BotChannel.Inventory, $"В рюкзаке нет вещей сета #{setId} — складывать нечего.");
             return;
         }
 
@@ -109,7 +109,7 @@ public static class InventoryOps
             .Where(i => i.SetId == setId).ToList();
         if (items.Count == 0)
         {
-            ctx.Log.Warn($"В сундуке нет вещей сета #{setId} — доставать нечего.");
+            ctx.Log.Warn(BotChannel.Inventory, $"В сундуке нет вещей сета #{setId} — доставать нечего.");
             return;
         }
 
@@ -130,7 +130,7 @@ public static class InventoryOps
 
     /// <summary>
     /// Выполнить одну мутацию: дождаться простоя → выстрелить → дождаться завершения →
-    /// вернуть текст ошибки сервера (или null при успехе).
+    /// вернуть текст ошибки сервера (или null при успехе). После — пауза (если включена).
     /// </summary>
     private static async UniTask<string> MutateAsync(BotContext ctx, Action fire)
     {
@@ -141,6 +141,9 @@ public static class InventoryOps
         fire(); // презентор синхронно ставит IsLoading=true и чистит ErrorMessage
 
         bool done = await BotWait.Until(() => !inv.IsLoading.Value, BotConfig.INVENTORY_TIMEOUT, ctx.Ct);
+
+        await ctx.PauseAfterActionAsync();
+
         if (!done) return "таймаут операции";
 
         var err = inv.ErrorMessage.Value;
@@ -151,11 +154,11 @@ public static class InventoryOps
     {
         if (error == null)
         {
-            ctx.Log.Info(okMsg);
+            ctx.Log.Info(BotChannel.Inventory, okMsg);
         }
         else
         {
-            ctx.Log.Warn($"{failMsg}: {error}");
+            ctx.Log.Warn(BotChannel.Inventory, $"{failMsg}: {error}");
             ctx.Stats.Rejections++;
         }
     }
@@ -178,7 +181,7 @@ public static class InventoryOps
         var chest = await ctx.InventoryService.GetChestAsync(ctx.Ct);
         if (!chest.Available)
         {
-            ctx.Log.Warn("В этой локации сундук недоступен — операция с сундуком пропущена.");
+            ctx.Log.Warn(BotChannel.Inventory, "В этой локации сундук недоступен — операция с сундуком пропущена.");
             return false;
         }
 
