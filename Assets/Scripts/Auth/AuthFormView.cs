@@ -19,7 +19,6 @@ public class AuthFormView : DisposableBehaviour
     [SerializeField] private Button         mSwitchButton;
     [SerializeField] private TMP_Text       mSwitchButtonLabel;
     [SerializeField] private GameObject     mSpinner;
-    [SerializeField] private TMP_Text       mErrorLabel;
 
     private AuthPresenter mPresenter;
     private BanPopup      mBanPopup;
@@ -48,9 +47,9 @@ public class AuthFormView : DisposableBehaviour
             .SubscribeOnValueChanged(SetLoadingState)
             .DisposeWhenLifeEnded(this);
 
-        mPresenter.ErrorMessage
-            .SubscribeOnValueChanged(SetErrorMessage)
-            .DisposeWhenLifeEnded(this);
+        // Ошибки формы/сервера теперь идут тостами через INotificationService
+        // (панель Canvas_Notifications) — см. Фаза 5. BanMessage остаётся отдельным
+        // модальным BanPopup, это не обычная ошибка.
 
         mPresenter.BanMessage
             .SubscribeOnValueChanged(OnBanMessageChanged)
@@ -86,12 +85,6 @@ public class AuthFormView : DisposableBehaviour
         mSubmitButton.interactable = !isLoading;
         mSwitchButton.interactable = !isLoading;
         mSpinner.SetActive(isLoading);
-    }
-
-    private void SetErrorMessage(string message)
-    {
-        mErrorLabel.text = message;
-        mErrorLabel.gameObject.SetActive(!string.IsNullOrEmpty(message));
     }
 
     private void OnBanMessageChanged(string message)

@@ -75,3 +75,4 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   mApiConfig: {fileID: 11400000, guid: dbcad9d6522fbaf419e92baa6be4f715, type: 2}
+  mNotificationConfig: {fileID: 11400000, guid: 72eb98cc7b7396942b339f90a82dae9a, type: 2}

@@ -34,8 +34,6 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
 
     private readonly Reactive<bool> mIsOpen = new(false);
     private readonly Reactive<bool> mIsLoading = new(false);
-    private readonly Reactive<string> mErrorMessage = new(string.Empty);
-    private readonly Reactive<string> mInfoMessage = new(string.Empty);
 
     private readonly Reactive<InventoryTab> mActiveTab = new(InventoryTab.Equipment);
 
@@ -53,8 +51,6 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
 
     public ReadonlyReactive<bool> IsOpen => mIsOpen.Readonly;
     public ReadonlyReactive<bool> IsLoading => mIsLoading.Readonly;
-    public ReadonlyReactive<string> ErrorMessage => mErrorMessage.Readonly;
-    public ReadonlyReactive<string> InfoMessage => mInfoMessage.Readonly;
     public ReadonlyReactive<InventoryTab> ActiveTab => mActiveTab.Readonly;
     public ReadonlyReactive<List<InventoryItemDto>> Equipped => mEquipped.Readonly;
     public ReadonlyReactive<List<InventoryItemDto>> Backpack => mBackpack.Readonly;
@@ -81,15 +77,18 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
 
     private readonly IInventoryService mService;
     private readonly CombatPresenter mCombatPresenter;
+    private readonly INotificationService mNotifications;
 
     [Inject]
-    public InventoryPresenter(IInventoryService service, CombatPresenter combatPresenter)
+    public InventoryPresenter(IInventoryService service, CombatPresenter combatPresenter,
+        INotificationService notifications)
     {
         mService = service;
         mCombatPresenter = combatPresenter;
+        mNotifications = notifications;
 
         AutoDispose(
-            mIsOpen, mIsLoading, mErrorMessage, mInfoMessage, mActiveTab,
+            mIsOpen, mIsLoading, mActiveTab,
             mEquipped, mBackpack, mChest, mStacks,
             mBackpackCapacity, mBackpackUsed, mChestAvailableHere, mSelectedItem);
     }
@@ -130,16 +129,12 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
     {
         mSelectedItem.Value = null;
         mIsOpen.Value = false;
-        mErrorMessage.Value = string.Empty;
-        mInfoMessage.Value = string.Empty;
     }
 
     /// <summary>Переключить вкладку. При открытии вкладки сундука/эффектов догружаем их данные.</summary>
     public void SelectTab(InventoryTab tab)
     {
         mActiveTab.Value = tab;
-        mInfoMessage.Value = string.Empty;
-        mErrorMessage.Value = string.Empty;
 
         switch (tab)
         {
@@ -169,7 +164,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
         RunMutation(async ct =>
         {
             var result = await mService.RepairAsync(instanceId, ct);
-            mInfoMessage.Value = $"Починено. Списано золота: {result.GoldSpent}.";
+            mNotifications.ShowInfo($"Починено. Списано золота: {result.GoldSpent}.");
         }).Forget();
 
     public void Deposit(long instanceId) =>
@@ -181,13 +176,30 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
     public void Discard(long instanceId) =>
         RunMutation(ct => mService.DiscardAsync(instanceId, ct)).Forget();
 
+    /// <summary>
+    /// Запросить выброс предмета с подтверждением (необратимое действие).
+    /// Показывает модальный диалог через сервис уведомлений; при подтверждении — Discard.
+    /// Заменяет старый Popup_Confirm.
+    /// </summary>
+    public void RequestDiscard(long instanceId, string itemName)
+    {
+        var name = string.IsNullOrEmpty(itemName) ? "предмет" : itemName;
+        mNotifications.ShowConfirm(
+            message: $"Выбросить «{name}»? Действие необратимо.",
+            onConfirm: () => Discard(instanceId),
+            onCancel: null,
+            title: "Выбросить предмет",
+            confirmLabel: "Выбросить",
+            cancelLabel: "Отмена",
+            type: NotificationType.Warning);
+    }
+
     // ─── Внутренняя загрузка ──────────────────────────────────────────────────
 
     /// <summary>Полное обновление: инвентарь (+ сундук/эффекты, если активна их вкладка).</summary>
     private async UniTask RefreshAsync(CancellationToken ct)
     {
         mIsLoading.Value = true;
-        mErrorMessage.Value = string.Empty;
         try
         {
             var inv = await mService.GetInventoryAsync(ct);
@@ -202,7 +214,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            mErrorMessage.Value = ApiMessage(ex);
+            mNotifications.ShowError(ApiMessage(ex));
             Debug.LogError($"[InventoryPresenter] Refresh: {ex}");
         }
         finally { mIsLoading.Value = false; }
@@ -221,7 +233,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            mErrorMessage.Value = ApiMessage(ex);
+            mNotifications.ShowError(ApiMessage(ex));
             Debug.LogWarning($"[InventoryPresenter] LoadChest: {ex.Message}");
         }
     }
@@ -236,7 +248,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            mErrorMessage.Value = ApiMessage(ex);
+            mNotifications.ShowError(ApiMessage(ex));
             Debug.LogWarning($"[InventoryPresenter] LoadStacks: {ex.Message}");
         }
     }
@@ -252,15 +264,13 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
 
     /// <summary>
     /// Обёртка мутации: блокирует на время запроса, закрывает попап деталей, перечитывает данные.
-    /// Любая ошибка сервера (в бою / нет места / уровень и т.д.) показывается в ErrorMessage.
+    /// Любая ошибка сервера (в бою / нет места / уровень и т.д.) показывается тостом-ошибкой.
     /// </summary>
     private async UniTask RunMutation(Func<CancellationToken, UniTask> mutation)
     {
         if (mIsLoading.Value) return;
 
         mIsLoading.Value = true;
-        mErrorMessage.Value = string.Empty;
-        mInfoMessage.Value = string.Empty;
         try
         {
             await mutation(mLifetimeCts.Token);
@@ -270,7 +280,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            mErrorMessage.Value = ApiMessage(ex);
+            mNotifications.ShowError(ApiMessage(ex));
             Debug.LogWarning($"[InventoryPresenter] Mutation: {ex.Message}");
         }
         finally { mIsLoading.Value = false; }

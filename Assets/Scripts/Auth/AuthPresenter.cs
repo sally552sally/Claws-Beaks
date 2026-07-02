@@ -15,11 +15,9 @@ public class AuthPresenter : DisposableObject
 
     private readonly Reactive<bool>   mIsLoginMode  = new(true);
     private readonly Reactive<bool>   mIsLoading    = new(false);
-    private readonly Reactive<string> mErrorMessage = new(string.Empty);
     private readonly Reactive<string> mBanMessage   = new(null);
 
     public ReadonlyReactive<bool>   IsLoading    => mIsLoading.Readonly;
-    public ReadonlyReactive<string> ErrorMessage => mErrorMessage.Readonly;
     public ReadonlyReactive<string> BanMessage   => mBanMessage.Readonly;
 
     // ─── Производные тексты (меняются при смене режима) ─────────────────────
@@ -32,19 +30,22 @@ public class AuthPresenter : DisposableObject
 
     private readonly IAuthService mAuthService;
     private readonly ISceneLoader mSceneLoader;
+    private readonly INotificationService mNotifications;
 
     [Inject]
-    public AuthPresenter(IAuthService authService, ISceneLoader sceneLoader)
+    public AuthPresenter(IAuthService authService, ISceneLoader sceneLoader,
+        INotificationService notifications)
     {
         mAuthService = authService;
         mSceneLoader = sceneLoader;
+        mNotifications = notifications;
 
         TitleText        = mIsLoginMode.Readonly.Select(l => l ? "Вход"                        : "Регистрация");
         SubmitButtonText = mIsLoginMode.Readonly.Select(l => l ? "Войти"                        : "Зарегистрироваться");
         SwitchButtonText = mIsLoginMode.Readonly.Select(l => l ? "Нет аккаунта? Регистрация"   : "Уже есть аккаунт? Войти");
 
         // Все owned Reactive-объекты уничтожаются вместе с Presenter
-        AutoDispose(mIsLoginMode, mIsLoading, mErrorMessage, mBanMessage);
+        AutoDispose(mIsLoginMode, mIsLoading, mBanMessage);
     }
 
     // ─── Команды ─────────────────────────────────────────────────────────────
@@ -53,7 +54,6 @@ public class AuthPresenter : DisposableObject
     public void SwitchMode()
     {
         mIsLoginMode.Value  = !mIsLoginMode.Value;
-        mErrorMessage.Value = string.Empty;
         mBanMessage.Value   = null;
     }
 
@@ -62,9 +62,8 @@ public class AuthPresenter : DisposableObject
     {
         if (!Validate(email, password)) return;
 
-        mIsLoading.Value    = true;
-        mErrorMessage.Value = string.Empty;
-        mBanMessage.Value   = null;
+        mIsLoading.Value  = true;
+        mBanMessage.Value = null;
 
         try
         {
@@ -81,12 +80,12 @@ public class AuthPresenter : DisposableObject
         }
         catch (ApiException ex)
         {
-            mErrorMessage.Value = ex.ServerError;
+            mNotifications.ShowError(ex.ServerError);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            mErrorMessage.Value = "Нет подключения к серверу";
+            mNotifications.ShowError("Нет подключения к серверу");
             Debug.LogError($"[AuthPresenter] Неожиданная ошибка: {ex}");
         }
         finally
@@ -102,25 +101,25 @@ public class AuthPresenter : DisposableObject
     {
         if (string.IsNullOrWhiteSpace(email))
         {
-            mErrorMessage.Value = "Введите email";
+            mNotifications.ShowError("Введите email");
             return false;
         }
 
         if (!email.Contains("@"))
         {
-            mErrorMessage.Value = "Некорректный email";
+            mNotifications.ShowError("Некорректный email");
             return false;
         }
 
         if (string.IsNullOrWhiteSpace(password))
         {
-            mErrorMessage.Value = "Введите пароль";
+            mNotifications.ShowError("Введите пароль");
             return false;
         }
 
         if (password.Length < 8)
         {
-            mErrorMessage.Value = "Пароль не менее 8 символов";
+            mNotifications.ShowError("Пароль не менее 8 символов");
             return false;
         }
 

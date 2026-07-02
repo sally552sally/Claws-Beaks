@@ -26,7 +26,6 @@ public class View_Location : DisposableBehaviour
     [SerializeField] private TMP_Text mLocationNameLabel;
     [SerializeField] private TMP_Text mLocationLevelLabel;
     [SerializeField] private TMP_Text mTimerLabel;
-    [SerializeField] private TMP_Text mErrorLabel;
     [SerializeField] private GameObject mLoadingSpinner;
 
     // ─── Соседние локации ─────────────────────────────────────────────────────
@@ -107,13 +106,8 @@ public class View_Location : DisposableBehaviour
             })
             .DisposeWhenLifeEnded(this);
 
-        mPresenter.ErrorMessage
-            .SubscribeOnValueChanged(msg =>
-            {
-                mErrorLabel.text = msg;
-                mErrorLabel.gameObject.SetActive(!string.IsNullOrEmpty(msg));
-            })
-            .DisposeWhenLifeEnded(this);
+        // Ошибки локации теперь идут тостами через INotificationService (Фаза 5),
+        // не строкой в этом экране.
 
         mPresenter.IsLoading
             .SubscribeOnValueChanged(loading => mLoadingSpinner.SetActive(loading))
