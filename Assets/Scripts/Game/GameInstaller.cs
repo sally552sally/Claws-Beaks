@@ -19,11 +19,15 @@ public class GameInstaller : MonoInstaller
     [SerializeField] private View_Inventory   mInventoryView;
     [SerializeField] private Popup_ItemDetail mItemDetailPopup;
 
+    [Header("Уведомления")]
+    [SerializeField] private View_Notifications mNotificationsView;
+
     public override void InstallBindings()
     {
         InstallLocation();
         InstallCombat();
         InstallInventory();
+        InstallNotifications();
     }
 
     // ─── Локация ──────────────────────────────────────────────────────────────
@@ -90,6 +94,17 @@ public class GameInstaller : MonoInstaller
 
         Container.Bind<Popup_ItemDetail>()
             .FromInstance(mItemDetailPopup)
+            .AsSingle();
+    }
+
+    // ─── Уведомления ────────────────────────────────────────────────────────────
+
+    private void InstallNotifications()
+    {
+        // Сервис (INotificationService) биндится на ProjectContext (ProjectInstaller).
+        // Здесь — только View сцены Game, которая его резолвит.
+        Container.Bind<View_Notifications>()
+            .FromInstance(mNotificationsView)
             .AsSingle();
     }
 }

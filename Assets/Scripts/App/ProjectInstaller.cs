@@ -9,12 +9,24 @@ using Zenject;
 public class ProjectInstaller : MonoInstaller
 {
     [SerializeField] private ApiConfig mApiConfig;
+    [SerializeField] private NotificationConfig mNotificationConfig;
 
     public override void InstallBindings()
     {
         // Конфиг
         Container.Bind<ApiConfig>()
             .FromInstance(mApiConfig)
+            .AsSingle();
+
+        // Конфиг уведомлений
+        Container.Bind<NotificationConfig>()
+            .FromInstance(mNotificationConfig)
+            .AsSingle();
+
+        // Сервис уведомлений (тосты/диалоги). ProjectContext — переживает смену сцен,
+        // очередь не теряется. View живёт в каждой сцене (Auth/Game) и резолвит этот сервис.
+        Container.Bind<INotificationService>()
+            .To<NotificationService>()
             .AsSingle();
 
         // Хранилище токенов

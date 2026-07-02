@@ -21,26 +21,24 @@ using Zenject;
 public sealed class View_Inventory : DisposableBehaviour
 {
     [Header("Корень / шапка")]
-    [SerializeField] private Button   mButtonClose;
+    [SerializeField] private Button mButtonClose;
     [SerializeField] private TMP_Text mLabelBackpackCount;   // «Рюкзак: 12/15»
-    [SerializeField] private TMP_Text mLabelError;
-    [SerializeField] private TMP_Text mLabelInfo;
     [SerializeField] private GameObject mSpinner;
 
     [Header("Вкладки")]
     [SerializeField] private Transform mTabsContainer;
-    [SerializeField] private Button    mTabButtonPrefab;     // Button с TMP_Text-потомком
+    [SerializeField] private Button mTabButtonPrefab;     // Button с TMP_Text-потомком
 
     [Header("Контент-панели вкладок")]
     [SerializeField] private GameObject mPanelEquipment;
     [SerializeField] private GameObject mPanelChest;
     [SerializeField] private GameObject mPanelEffects;
     [SerializeField] private GameObject mPanelPlaceholder;
-    [SerializeField] private TMP_Text   mLabelPlaceholder;
+    [SerializeField] private TMP_Text mLabelPlaceholder;
 
     [Header("Снаряжение")]
     [SerializeField] private EquipSlotView[] mEquipSlots;    // фиксированные слоты (по SlotKey)
-    [SerializeField] private Transform       mBackpackContainer;
+    [SerializeField] private Transform mBackpackContainer;
     [SerializeField] private InventoryItemSlotView mItemSlotPrefab;
 
     [Header("Сундук")]
@@ -147,23 +145,8 @@ public sealed class View_Inventory : DisposableBehaviour
             mLabelBackpackCount.SetTextSource(text).DisposeWhenLifeEnded(this);
         }
 
-        if (mLabelError != null)
-            mPresenter.ErrorMessage
-                .SubscribeOnValueChanged(msg =>
-                {
-                    mLabelError.text = msg;
-                    mLabelError.gameObject.SetActive(!string.IsNullOrEmpty(msg));
-                })
-                .DisposeWhenLifeEnded(this);
-
-        if (mLabelInfo != null)
-            mPresenter.InfoMessage
-                .SubscribeOnValueChanged(msg =>
-                {
-                    mLabelInfo.text = msg;
-                    mLabelInfo.gameObject.SetActive(!string.IsNullOrEmpty(msg));
-                })
-                .DisposeWhenLifeEnded(this);
+        // Сообщения об ошибках/инфо теперь идут тостами через INotificationService
+        // (панель Canvas_Notifications), а не строкой в шапке инвентаря — см. Фаза 5.
 
         if (mSpinner != null)
             mPresenter.IsLoading
@@ -194,8 +177,8 @@ public sealed class View_Inventory : DisposableBehaviour
         bool placeholder = InventoryTabInfo.IsPlaceholder(tab);
 
         SetActive(mPanelEquipment, tab == InventoryTab.Equipment);
-        SetActive(mPanelChest,     tab == InventoryTab.Chest);
-        SetActive(mPanelEffects,   tab == InventoryTab.Effects);
+        SetActive(mPanelChest, tab == InventoryTab.Chest);
+        SetActive(mPanelEffects, tab == InventoryTab.Effects);
         SetActive(mPanelPlaceholder, placeholder);
 
         if (placeholder && mLabelPlaceholder != null)

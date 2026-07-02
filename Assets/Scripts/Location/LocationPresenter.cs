@@ -28,52 +28,63 @@ public class LocationPresenter : DisposableObject, IInitializable
 
     // ─── Реактивное состояние (Presenter → View) ──────────────────────────────
 
-    private readonly Reactive<string> mLocationName    = new(string.Empty);
-    private readonly Reactive<int>    mLocationLevel   = new(0);
-    private readonly Reactive<bool>   mCanMove         = new(false);
-    private readonly Reactive<string> mTimerText       = new(string.Empty);
-    private readonly Reactive<bool>   mIsLoading       = new(false);
-    private readonly Reactive<string> mErrorMessage    = new(string.Empty);
-    private readonly Reactive<List<NeighborDto>>       mNeighbors = new(new List<NeighborDto>());
+    private readonly Reactive<string> mLocationName = new(string.Empty);
+    private readonly Reactive<int> mLocationLevel = new(0);
+    private readonly Reactive<bool> mCanMove = new(false);
+    private readonly Reactive<string> mTimerText = new(string.Empty);
+    private readonly Reactive<bool> mIsLoading = new(false);
+    private readonly Reactive<List<NeighborDto>> mNeighbors = new(new List<NeighborDto>());
     private readonly Reactive<List<DungeonEntranceDto>> mDungeons = new(new List<DungeonEntranceDto>());
-    private readonly Reactive<List<MobSpawnDto>>       mMobs      = new(new List<MobSpawnDto>());
-    private readonly Reactive<List<PlayerInLocationDto>> mPlayers  = new(new List<PlayerInLocationDto>());
+    private readonly Reactive<List<MobSpawnDto>> mMobs = new(new List<MobSpawnDto>());
+    private readonly Reactive<List<PlayerInLocationDto>> mPlayers = new(new List<PlayerInLocationDto>());
 
     /// <summary>Открыта ли Panel_Hunting поверх Panel_LocationMain.</summary>
     private readonly Reactive<bool> mIsHuntingOpen = new(false);
 
-    public ReadonlyReactive<string> LocationName   => mLocationName.Readonly;
-    public ReadonlyReactive<int>    LocationLevel  => mLocationLevel.Readonly;
-    public ReadonlyReactive<bool>   CanMove        => mCanMove.Readonly;
-    public ReadonlyReactive<string> TimerText      => mTimerText.Readonly;
-    public ReadonlyReactive<bool>   IsLoading      => mIsLoading.Readonly;
-    public ReadonlyReactive<string> ErrorMessage   => mErrorMessage.Readonly;
-    public ReadonlyReactive<List<NeighborDto>>        Neighbors => mNeighbors.Readonly;
-    public ReadonlyReactive<List<DungeonEntranceDto>> Dungeons  => mDungeons.Readonly;
-    public ReadonlyReactive<List<MobSpawnDto>>        Mobs      => mMobs.Readonly;
-    public ReadonlyReactive<List<PlayerInLocationDto>> Players  => mPlayers.Readonly;
-    public ReadonlyReactive<bool>   IsHuntingOpen  => mIsHuntingOpen.Readonly;
+    /// <summary>Персонаж мёртв и ждёт воскрешения. Пока true — обычный экран локации
+    /// заблокирован модальным диалогом воскрешения (см. ShowResurrectDialogIfNeeded).</summary>
+    private readonly Reactive<bool> mIsAwaitingResurrection = new(false);
+
+    public ReadonlyReactive<string> LocationName => mLocationName.Readonly;
+    public ReadonlyReactive<int> LocationLevel => mLocationLevel.Readonly;
+    public ReadonlyReactive<bool> CanMove => mCanMove.Readonly;
+    public ReadonlyReactive<string> TimerText => mTimerText.Readonly;
+    public ReadonlyReactive<bool> IsLoading => mIsLoading.Readonly;
+    public ReadonlyReactive<List<NeighborDto>> Neighbors => mNeighbors.Readonly;
+    public ReadonlyReactive<List<DungeonEntranceDto>> Dungeons => mDungeons.Readonly;
+    public ReadonlyReactive<List<MobSpawnDto>> Mobs => mMobs.Readonly;
+    public ReadonlyReactive<List<PlayerInLocationDto>> Players => mPlayers.Readonly;
+    public ReadonlyReactive<bool> IsHuntingOpen => mIsHuntingOpen.Readonly;
+    public ReadonlyReactive<bool> IsAwaitingResurrection => mIsAwaitingResurrection.Readonly;
 
     // ─── Внутреннее состояние ─────────────────────────────────────────────────
 
-    private DateTime?                  mLockedUntilUtc;
-    private CancellationTokenSource    mTimerCts;
+    private DateTime? mLockedUntilUtc;
+    private CancellationTokenSource mTimerCts;
     private readonly CancellationTokenSource mLifetimeCts = new();
 
     // ─── Зависимости ──────────────────────────────────────────────────────────
 
     private readonly ILocationService mLocationService;
+    private readonly ICombatService mCombatService;
+    private readonly INotificationService mNotifications;
+
+    /// <summary>Диалог воскрешения уже показан и ждёт ответа — не дублировать при повторных Refresh.</summary>
+    private bool mResurrectDialogPending;
 
     [Inject]
-    public LocationPresenter(ILocationService locationService)
+    public LocationPresenter(ILocationService locationService, ICombatService combatService,
+        INotificationService notifications)
     {
         mLocationService = locationService;
+        mCombatService = combatService;
+        mNotifications = notifications;
 
         AutoDispose(
             mLocationName, mLocationLevel, mCanMove,
-            mTimerText, mIsLoading, mErrorMessage,
+            mTimerText, mIsLoading,
             mNeighbors, mDungeons, mMobs, mPlayers,
-            mIsHuntingOpen);
+            mIsHuntingOpen, mIsAwaitingResurrection);
     }
 
     // ─── IInitializable ───────────────────────────────────────────────────────
@@ -88,8 +99,7 @@ public class LocationPresenter : DisposableObject, IInitializable
     /// <summary>Обновить данные локации с сервера.</summary>
     public async UniTask RefreshAsync(CancellationToken ct)
     {
-        mIsLoading.Value    = true;
-        mErrorMessage.Value = string.Empty;
+        mIsLoading.Value = true;
 
         try
         {
@@ -100,9 +110,9 @@ public class LocationPresenter : DisposableObject, IInitializable
         catch (Exception ex)
         {
             if (IsDisposed) return;
-            mErrorMessage.Value = ex is ApiException apiEx
+            mNotifications.ShowError(ex is ApiException apiEx
                 ? apiEx.ServerError
-                : "Нет подключения к серверу";
+                : "Нет подключения к серверу");
             Debug.LogError($"[LocationPresenter] RefreshAsync: {ex}");
         }
         finally
@@ -116,8 +126,7 @@ public class LocationPresenter : DisposableObject, IInitializable
     {
         if (!mCanMove.Value) return;
 
-        mIsLoading.Value    = true;
-        mErrorMessage.Value = string.Empty;
+        mIsLoading.Value = true;
 
         try
         {
@@ -129,13 +138,13 @@ public class LocationPresenter : DisposableObject, IInitializable
         catch (ApiException ex)
         {
             if (IsDisposed) return;
-            mErrorMessage.Value = ex.ServerError;
+            mNotifications.ShowError(ex.ServerError);
             Debug.LogError($"[LocationPresenter] MoveAsync: {ex.ServerError}");
         }
         catch (Exception ex)
         {
             if (IsDisposed) return;
-            mErrorMessage.Value = "Нет подключения к серверу";
+            mNotifications.ShowError("Нет подключения к серверу");
             Debug.LogError($"[LocationPresenter] MoveAsync: {ex}");
         }
         finally
@@ -145,7 +154,7 @@ public class LocationPresenter : DisposableObject, IInitializable
     }
 
     /// <summary>Открыть экран охоты (скрыть Panel_LocationMain, показать Panel_Hunting).</summary>
-    public void OpenHunting()  => mIsHuntingOpen.Value = true;
+    public void OpenHunting() => mIsHuntingOpen.Value = true;
 
     /// <summary>Закрыть экран охоты (вернуться в Panel_LocationMain).</summary>
     public void CloseHunting() => mIsHuntingOpen.Value = false;
@@ -154,14 +163,15 @@ public class LocationPresenter : DisposableObject, IInitializable
 
     private void ApplyLocationData(CurrentLocationResponse response)
     {
-        mLocationName.Value  = response.Name;
+        mLocationName.Value = response.Name;
         mLocationLevel.Value = response.Level;
-        mCanMove.Value       = response.CanMove;
-        mLockedUntilUtc      = response.LockedUntilUtc;
-        mNeighbors.Value     = response.Neighbors       ?? new List<NeighborDto>();
-        mDungeons.Value      = response.DungeonEntrances ?? new List<DungeonEntranceDto>();
-        mMobs.Value          = response.Mobs            ?? new List<MobSpawnDto>();
-        mPlayers.Value       = response.Players         ?? new List<PlayerInLocationDto>();
+        mCanMove.Value = response.CanMove;
+        mLockedUntilUtc = response.LockedUntilUtc;
+        mNeighbors.Value = response.Neighbors ?? new List<NeighborDto>();
+        mDungeons.Value = response.DungeonEntrances ?? new List<DungeonEntranceDto>();
+        mMobs.Value = response.Mobs ?? new List<MobSpawnDto>();
+        mPlayers.Value = response.Players ?? new List<PlayerInLocationDto>();
+        mIsAwaitingResurrection.Value = response.IsAwaitingResurrection;
 
         StopTimer();
 
@@ -169,6 +179,57 @@ public class LocationPresenter : DisposableObject, IInitializable
             StartTimer();
         else
             mTimerText.Value = string.Empty;
+
+        if (response.IsAwaitingResurrection)
+            ShowResurrectDialogIfNeeded();
+        else
+            mResurrectDialogPending = false; // персонаж жив — разрешаем показать диалог заново, если умрёт снова
+    }
+
+    // ─── Воскрешение ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Показывает модальный диалог «вы мертвы» с одной кнопкой «Воскреснуть», если он ещё
+    /// не показан. Не даёт задублироваться при повторных RefreshAsync, пока ждём ответа.
+    /// Диалог без вторичной кнопки — закрыть его можно только воскрешением (по требованию).
+    /// </summary>
+    private void ShowResurrectDialogIfNeeded()
+    {
+        if (mResurrectDialogPending) return;
+        mResurrectDialogPending = true;
+
+        mNotifications.ShowDialog(
+            message: "Вы погибли и ожидаете воскрешения.",
+            title: "Вы мертвы",
+            type: NotificationType.Warning,
+            primaryLabel: "Воскреснуть",
+            onPrimary: () => ResurrectAsync(mLifetimeCts.Token).Forget());
+    }
+
+    /// <summary>Воскресить персонажа (POST /api/combat/resurrect) и обновить локацию.</summary>
+    public async UniTask ResurrectAsync(CancellationToken ct)
+    {
+        try
+        {
+            await mCombatService.ResurrectAsync(ct);
+            mResurrectDialogPending = false;
+            await RefreshAsync(ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (ApiException ex)
+        {
+            if (IsDisposed) return;
+            mResurrectDialogPending = false; // разрешаем показать диалог заново при следующем Refresh
+            mNotifications.ShowError(ex.ServerError);
+            Debug.LogError($"[LocationPresenter] ResurrectAsync: {ex.ServerError}");
+        }
+        catch (Exception ex)
+        {
+            if (IsDisposed) return;
+            mResurrectDialogPending = false;
+            mNotifications.ShowError("Нет подключения к серверу");
+            Debug.LogError($"[LocationPresenter] ResurrectAsync: {ex}");
+        }
     }
 
     // ─── Таймер ───────────────────────────────────────────────────────────────
@@ -196,7 +257,7 @@ public class LocationPresenter : DisposableObject, IInitializable
             {
                 if (!mLockedUntilUtc.HasValue) break;
 
-                var remaining   = mLockedUntilUtc.Value - DateTime.UtcNow;
+                var remaining = mLockedUntilUtc.Value - DateTime.UtcNow;
                 var secondsLeft = (int)Math.Ceiling(remaining.TotalSeconds);
 
                 if (secondsLeft > 0)
@@ -207,7 +268,7 @@ public class LocationPresenter : DisposableObject, IInitializable
                 }
 
                 mTimerText.Value = "—";
-                var response     = await mLocationService.GetCurrentAsync(ct);
+                var response = await mLocationService.GetCurrentAsync(ct);
 
                 if (response.CanMove)
                 {
@@ -256,3 +317,4 @@ public class LocationPresenter : DisposableObject, IInitializable
         base.OnDispose();
     }
 }
+
