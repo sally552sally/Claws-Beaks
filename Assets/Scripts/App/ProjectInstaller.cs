@@ -10,6 +10,8 @@ public class ProjectInstaller : MonoInstaller
 {
     [SerializeField] private ApiConfig mApiConfig;
     [SerializeField] private NotificationConfig mNotificationConfig;
+    [SerializeField] private RealtimeConfig mRealtimeConfig;
+    [SerializeField] private ChatConfig mChatConfig;
 
     public override void InstallBindings()
     {
@@ -21,6 +23,18 @@ public class ProjectInstaller : MonoInstaller
         // Конфиг уведомлений
         Container.Bind<NotificationConfig>()
             .FromInstance(mNotificationConfig)
+            .AsSingle();
+
+        // Конфиг realtime-соединений (SignalR) — сами соединения живут на Game-сцене
+        // (GameInstaller), конфиг — здесь, как и остальные конфиги проекта.
+        Container.Bind<RealtimeConfig>()
+            .FromInstance(mRealtimeConfig)
+            .AsSingle();
+
+        // Конфиг чата (лимит символов, окно буфера, цвета тегов) — сами сервисы чата
+        // живут на Game-сцене (GameInstaller), конфиг — здесь.
+        Container.Bind<ChatConfig>()
+            .FromInstance(mChatConfig)
             .AsSingle();
 
         // Сервис уведомлений (тосты/диалоги). ProjectContext — переживает смену сцен,

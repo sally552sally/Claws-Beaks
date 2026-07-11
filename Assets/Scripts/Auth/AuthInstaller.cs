@@ -12,7 +12,10 @@ public class AuthInstaller : MonoInstaller
 
     public override void InstallBindings()
     {
-        Container.Bind<AuthPresenter>()
+        // BindInterfacesAndSelfTo — AuthPresenter теперь реализует IInitializable
+        // (DEV_BUILD-автологин при попадании на сцену, см. AuthPresenter.Initialize).
+        // Обычный Bind<T>() интерфейсы не регистрирует — Zenject не вызвал бы Initialize().
+        Container.BindInterfacesAndSelfTo<AuthPresenter>()
             .AsSingle()
             .NonLazy();
 

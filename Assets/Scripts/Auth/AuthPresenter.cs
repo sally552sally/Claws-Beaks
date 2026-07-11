@@ -8,14 +8,21 @@ using Zenject;
 /// Единственный Presenter для Auth-сцены.
 /// Управляет режимом (вход / регистрация) и выдаёт реактивные тексты.
 /// View не знает о режиме — просто подписывается на тексты кнопок.
+///
+/// DEV_BUILD: автологин по DevCredentials при КАЖДОМ попадании на эту сцену — не только
+/// при старте приложения через BootstrapEntryPoint, но и при редиректе сюда из середины
+/// игры (SessionExpired → AppController → Auth). Раньше автологин срабатывал только в
+/// Bootstrap, поэтому протухшая сессия посреди игры кидала на пустую форму логина вместо
+/// того, чтобы тут же перелогиниться под тот же дев-аккаунт.
 /// </summary>
-public class AuthPresenter : DisposableObject
+public class AuthPresenter : DisposableObject, IInitializable
 {
     // ─── Состояние ───────────────────────────────────────────────────────────
 
     private readonly Reactive<bool>   mIsLoginMode  = new(true);
     private readonly Reactive<bool>   mIsLoading    = new(false);
     private readonly Reactive<string> mBanMessage   = new(null);
+    private readonly CancellationTokenSource mLifetimeCts = new();
 
     public ReadonlyReactive<bool>   IsLoading    => mIsLoading.Readonly;
     public ReadonlyReactive<string> BanMessage   => mBanMessage.Readonly;
@@ -46,6 +53,18 @@ public class AuthPresenter : DisposableObject
 
         // Все owned Reactive-объекты уничтожаются вместе с Presenter
         AutoDispose(mIsLoginMode, mIsLoading, mBanMessage);
+    }
+
+    // ─── IInitializable ─────────────────────────────────────────────────────
+
+    public void Initialize()
+    {
+#if DEV_BUILD
+        // Автологин дев-аккаунтом при КАЖДОМ попадании на Auth-сцену — форма логина
+        // в DEV_BUILD руками не заполняется вообще, см. класс-комментарий.
+        mIsLoginMode.Value = true;
+        SubmitAsync(DevCredentials.EMAIL, DevCredentials.PASSWORD, mLifetimeCts.Token).Forget();
+#endif
     }
 
     // ─── Команды ─────────────────────────────────────────────────────────────
@@ -124,5 +143,12 @@ public class AuthPresenter : DisposableObject
         }
 
         return true;
+    }
+
+    protected override void OnDispose()
+    {
+        mLifetimeCts.Cancel();
+        mLifetimeCts.Dispose();
+        base.OnDispose();
     }
 }

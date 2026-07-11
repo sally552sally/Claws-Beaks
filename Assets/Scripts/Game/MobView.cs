@@ -67,6 +67,13 @@ public class MobView : MonoBehaviour
         MobSpawnDto mob, RectTransform areaRect, HuntingConfig config,
         Action<long> onAttackClicked)
     {
+        // Awake() мог ещё не отработать — Instantiate() в НЕАКТИВНУЮ иерархию (Panel_Hunting
+        // закрыта в момент, когда пришли данные о локации — например, SignalR-обновление
+        // мобов, пока игрок стоит на Panel_LocationMain) не вызывает Awake() синхронно,
+        // Unity откладывает его до активации. Раньше это было недостижимо (мобы обновлялись
+        // только пока охота открыта), с живым SignalR — стало реальным сценарием.
+        if (mSelfRect == null) mSelfRect = GetComponent<RectTransform>();
+
         mSpawnId         = mob.SpawnId;
         mConfig          = config;
         mAreaRect        = areaRect;
