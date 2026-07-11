@@ -1,3 +1,4 @@
+using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -10,6 +11,10 @@ using UnityEngine.UI;
 /// При показе: включаем Overlay + сам попап.
 /// При скрытии: выключаем оба.
 /// Overlay перехватывает тап мимо попапа → закрывает меню.
+///
+/// Не часть Zenject-графа (простой SerializeField на View_Hunting, как и раньше) —
+/// сообщает о действиях через C#-события, владелец (View_Hunting) сам решает, что делать
+/// (см. MessageClicked → mChatPresenter.SetPrivateTarget + Open() в View_Hunting).
 ///
 /// GameObject: PopupPlayerContext
 /// Overlay:    Overlay_ContextMenu (дочерний Canvas, перед PopupPlayerContext)
@@ -33,6 +38,11 @@ public class ContextMenuPopup : MonoBehaviour
 
     private RectTransform mSelfRect;
     private RectTransform mCanvasRect;
+
+    private PlayerInLocationDto mPlayer;
+
+    /// <summary>Кнопка «Написать» нажата для показанного игрока (Фаза 6 — чат).</summary>
+    public event Action<PlayerInLocationDto> MessageClicked;
 
     private void Awake()
     {
@@ -63,6 +73,7 @@ public class ContextMenuPopup : MonoBehaviour
     /// </summary>
     public void Show(PlayerInLocationDto player, Vector2 screenPosition)
     {
+        mPlayer = player;
         mPlayerNameLabel.text = player.Nickname;
 
         RectTransformUtility.ScreenPointToLocalPointInRectangle(
@@ -84,7 +95,7 @@ public class ContextMenuPopup : MonoBehaviour
         mOverlayButton.gameObject.SetActive(false);
     }
 
-    // ─── Обработчики (заглушки) ───────────────────────────────────────────────
+    // ─── Обработчики ──────────────────────────────────────────────────────────
 
     private void OnProfileClicked()
     {
@@ -94,7 +105,7 @@ public class ContextMenuPopup : MonoBehaviour
 
     private void OnMessageClicked()
     {
-        Debug.Log("[ContextMenuPopup] Написать — заглушка Фазы 5");
+        MessageClicked?.Invoke(mPlayer);
         Hide();
     }
 

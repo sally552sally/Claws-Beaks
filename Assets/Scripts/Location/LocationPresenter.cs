@@ -57,6 +57,10 @@ public class LocationPresenter : DisposableObject, IInitializable
     public ReadonlyReactive<bool> IsHuntingOpen => mIsHuntingOpen.Readonly;
     public ReadonlyReactive<bool> IsAwaitingResurrection => mIsAwaitingResurrection.Readonly;
 
+    /// <summary>Локация, в которой мы сейчас, по данным последнего REST-ответа. null пока
+    /// не пришёл первый ответ. Публична для ChatPresenter — чистит буфер чата локации при смене.</summary>
+    public ReadonlyReactive<long?> CurrentLocationId => mCurrentLocationId.Readonly;
+
     // ─── Внутреннее состояние ─────────────────────────────────────────────────
 
     private DateTime? mLockedUntilUtc;
@@ -68,23 +72,43 @@ public class LocationPresenter : DisposableObject, IInitializable
     private readonly ILocationService mLocationService;
     private readonly ICombatService mCombatService;
     private readonly INotificationService mNotifications;
+    private readonly ILocationRealtimeService mRealtime;
+    private readonly ICharacterContext mCharacterContext;
+    private readonly IAuthService mAuthService;
+    private readonly ISceneLoader mSceneLoader;
 
     /// <summary>Диалог воскрешения уже показан и ждёт ответа — не дублировать при повторных Refresh.</summary>
     private bool mResurrectDialogPending;
 
+    /// <summary>Используется, чтобы понять, что locationId сменился и нужно перевступить
+    /// в SignalR-группу (см. ApplyLocationData → mRealtime.SetCurrentLocationAsync).
+    /// Reactive, а не плоское поле — публично читается ChatPresenter (см. CurrentLocationId выше).</summary>
+    private readonly Reactive<long?> mCurrentLocationId = new(null);
+
     [Inject]
     public LocationPresenter(ILocationService locationService, ICombatService combatService,
-        INotificationService notifications)
+        INotificationService notifications, ILocationRealtimeService realtime, ICharacterContext characterContext,
+        IAuthService authService, ISceneLoader sceneLoader)
     {
         mLocationService = locationService;
         mCombatService = combatService;
         mNotifications = notifications;
+        mRealtime = realtime;
+        mCharacterContext = characterContext;
+        mAuthService = authService;
+        mSceneLoader = sceneLoader;
 
         AutoDispose(
             mLocationName, mLocationLevel, mCanMove,
             mTimerText, mIsLoading,
             mNeighbors, mDungeons, mMobs, mPlayers,
-            mIsHuntingOpen, mIsAwaitingResurrection);
+            mIsHuntingOpen, mIsAwaitingResurrection, mCurrentLocationId);
+
+        mRealtime.MobStateChanged += OnMobStateChanged;
+        mRealtime.PlayerEntered += OnPlayerEntered;
+        mRealtime.PlayerLeft += OnPlayerLeft;
+        mRealtime.CombatStarted += OnCombatStarted;
+        mRealtime.Resynced += OnRealtimeResynced;
     }
 
     // ─── IInitializable ───────────────────────────────────────────────────────
@@ -159,6 +183,16 @@ public class LocationPresenter : DisposableObject, IInitializable
     /// <summary>Закрыть экран охоты (вернуться в Panel_LocationMain).</summary>
     public void CloseHunting() => mIsHuntingOpen.Value = false;
 
+    /// <summary>Выйти из аккаунта — токены чистятся локально ПЕРВЫМ делом внутри
+    /// IAuthService.LogoutAsync (сессия считается завершённой, даже если сервер
+    /// недоступен — там же и обёрнута попытка сообщить об этом серверу).
+    /// Для кнопки «Выйти»: SubscribeOnClick(() => mPresenter.LogoutAsync(destroyCancellationToken).Forget()).</summary>
+    public async UniTask LogoutAsync(CancellationToken ct)
+    {
+        await mAuthService.LogoutAsync(ct);
+        await mSceneLoader.LoadAsync(SceneNames.AUTH, ct);
+    }
+
     // ─── Внутренняя логика ────────────────────────────────────────────────────
 
     private void ApplyLocationData(CurrentLocationResponse response)
@@ -172,6 +206,14 @@ public class LocationPresenter : DisposableObject, IInitializable
         mMobs.Value = response.Mobs ?? new List<MobSpawnDto>();
         mPlayers.Value = response.Players ?? new List<PlayerInLocationDto>();
         mIsAwaitingResurrection.Value = response.IsAwaitingResurrection;
+
+        if (mCurrentLocationId.Value != response.LocationId)
+        {
+            mCurrentLocationId.Value = response.LocationId;
+            // Не блокируем применение остального стейта ожиданием сети — вступление
+            // в SignalR-группу локации идёт в фоне (см. ILocationRealtimeService).
+            mRealtime.SetCurrentLocationAsync(response.LocationId, mLifetimeCts.Token).Forget();
+        }
 
         StopTimer();
 
@@ -230,6 +272,83 @@ public class LocationPresenter : DisposableObject, IInitializable
             mNotifications.ShowError("Нет подключения к серверу");
             Debug.LogError($"[LocationPresenter] ResurrectAsync: {ex}");
         }
+    }
+
+    // ─── Realtime-события локации (SignalR) ────────────────────────────────────
+
+    /// <summary>Состояние спавна моба изменилось (alive/in_combat/dead) — точечно обновляем
+    /// запись в списке, не трогая остальные (полная перезагрузка — только на Resynced).</summary>
+    private void OnMobStateChanged(MobStateChangedEvent e)
+    {
+        var current = mMobs.Value;
+        var index = current.FindIndex(m => m.SpawnId == e.SpawnId);
+        if (index < 0)
+        {
+            // Моба нет в текущем REST-снимке (гонка при входе в локацию) — ближайший
+            // RefreshAsync/Resynced подтянет его. Не создаём частичную запись без Name/Level,
+            // которых это событие не несёт.
+            return;
+        }
+
+        var original = current[index];
+        var updated = new List<MobSpawnDto>(current);
+        updated[index] = new MobSpawnDto
+        {
+            SpawnId = original.SpawnId,
+            Name = original.Name,
+            Level = original.Level,
+            State = e.State,
+            RespawnAt = e.RespawnAt
+        };
+        mMobs.Value = updated;
+    }
+
+    /// <summary>Игрок вошёл в текущую локацию — добавляем в список (идемпотентно).</summary>
+    private void OnPlayerEntered(PlayerEnteredEvent e)
+    {
+        var current = mPlayers.Value;
+        if (current.Exists(p => p.CharacterId == e.CharacterId)) return;
+
+        var updated = new List<PlayerInLocationDto>(current)
+        {
+            new PlayerInLocationDto
+            {
+                CharacterId = e.CharacterId,
+                Nickname = e.Nickname,
+                Level = e.Level
+            }
+        };
+        mPlayers.Value = updated;
+    }
+
+    /// <summary>Игрок покинул текущую локацию — убираем из списка.</summary>
+    private void OnPlayerLeft(PlayerLeftEvent e)
+    {
+        var current = mPlayers.Value;
+        if (!current.Exists(p => p.CharacterId == e.CharacterId)) return;
+
+        var updated = new List<PlayerInLocationDto>(current);
+        updated.RemoveAll(p => p.CharacterId == e.CharacterId);
+        mPlayers.Value = updated;
+    }
+
+    /// <summary>PvP-бой начался где-то в локации — событие приходит всем, показываем
+    /// предупреждение, только если жертва — это мы (см. CombatStartedEvent).</summary>
+    private void OnCombatStarted(CombatStartedEvent e)
+    {
+        if (mCharacterContext.CharacterId.Value != e.DefenderCharacterId) return;
+
+        mNotifications.ShowWarning($"{e.AttackerNickname} напал на вас!");
+
+        // Сюда намеренно НЕ добавлен автопереход в экран боя — это отдельная задача
+        // (нужна привязка CombatId к CombatPresenter), не в этом заходе.
+    }
+
+    /// <summary>Соединение (пере)установлено — пропущенные за паузу дельты сервер не хранит,
+    /// тянем полный снимок локации заново.</summary>
+    private void OnRealtimeResynced()
+    {
+        RefreshAsync(mLifetimeCts.Token).Forget();
     }
 
     // ─── Таймер ───────────────────────────────────────────────────────────────
@@ -311,6 +430,12 @@ public class LocationPresenter : DisposableObject, IInitializable
 
     protected override void OnDispose()
     {
+        mRealtime.MobStateChanged -= OnMobStateChanged;
+        mRealtime.PlayerEntered -= OnPlayerEntered;
+        mRealtime.PlayerLeft -= OnPlayerLeft;
+        mRealtime.CombatStarted -= OnCombatStarted;
+        mRealtime.Resynced -= OnRealtimeResynced;
+
         StopTimer();
         mLifetimeCts.Cancel();
         mLifetimeCts.Dispose();
