@@ -1,0 +1,49 @@
+<linker>
+  <!--
+    IL2CPP-стриппер вырезает "неиспользуемый" код по статическому анализу вызовов.
+    SignalR-клиент и Newtonsoft.Json работают через рефлексию (десериализация DTO,
+    поиск протоколов) — статический анализ этого не видит, поэтому явно сохраняем.
+
+    Если после билда всё равно вылезет MissingMethodException/TypeLoadException
+    на рантайме именно в SignalR/Newtonsoft-коде — проверить здесь в первую очередь.
+  -->
+
+  <assembly fullname="Microsoft.AspNetCore.SignalR.Client">
+    <type fullname="*" preserve="all" />
+  </assembly>
+  <assembly fullname="Microsoft.AspNetCore.SignalR.Client.Core">
+    <type fullname="*" preserve="all" />
+  </assembly>
+  <assembly fullname="Microsoft.AspNetCore.SignalR.Common">
+    <type fullname="*" preserve="all" />
+  </assembly>
+  <assembly fullname="Microsoft.AspNetCore.SignalR.Protocols.Json">
+    <type fullname="*" preserve="all" />
+  </assembly>
+  <assembly fullname="Microsoft.AspNetCore.SignalR.Protocols.NewtonsoftJson">
+    <type fullname="*" preserve="all" />
+  </assembly>
+  <assembly fullname="Microsoft.AspNetCore.Http.Connections.Client">
+    <type fullname="*" preserve="all" />
+  </assembly>
+  <assembly fullname="Microsoft.AspNetCore.Connections.Common">
+    <type fullname="*" preserve="all" />
+  </assembly>
+  <assembly fullname="Newtonsoft.Json">
+    <type fullname="*" preserve="all" />
+  </assembly>
+
+  <!-- Наши DTO push-событий и REST-ответов — десериализуются Newtonsoft/SignalR через
+       рефлексию, у стриппера нет статической причины их сохранить (нигде явно не
+       создаются через new в коде, который он анализирует). -->
+  <assembly fullname="Assembly-CSharp">
+    <type fullname="MobStateChangedEvent" preserve="all" />
+    <type fullname="PlayerEnteredEvent" preserve="all" />
+    <type fullname="PlayerLeftEvent" preserve="all" />
+    <type fullname="CombatStartedEvent" preserve="all" />
+    <type fullname="MyCharacterResponse" preserve="all" />
+    <type fullname="ChatMessageView" preserve="all" />
+    <type fullname="SendMessageRequest" preserve="all" />
+    <type fullname="SendMessageResponse" preserve="all" />
+  </assembly>
+</linker>

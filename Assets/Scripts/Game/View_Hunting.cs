@@ -45,19 +45,15 @@ public class View_Hunting : DisposableBehaviour
     [SerializeField] private Button mButtonBack;
     /// <summary>Кнопка «Инвентарь» — открывает Panel_Inventory поверх охоты.</summary>
     [SerializeField] private Button mButtonInventory;
-
-    // ─── DEV ──────────────────────────────────────────────────────────────────
-
-#if DEV_BUILD
-    [Header("DEV — убрать в Фазе 5 (SignalR)")]
-    [SerializeField] private Button mRefreshButton;
-#endif
+    /// <summary>Кнопка «Чат» — открывает Panel_Chat поверх охоты.</summary>
+    [SerializeField] private Button mButtonChat;
 
     // ─── Внутренний стейт ─────────────────────────────────────────────────────
 
     private LocationPresenter mPresenter;
     private CombatPresenter   mCombatPresenter;
     private InventoryPresenter mInventoryPresenter;
+    private ChatPresenter mChatPresenter;
 
     private readonly List<MobView>        mMobViews    = new();
     private readonly List<PlayerListItem> mPlayerItems = new();
@@ -66,11 +62,12 @@ public class View_Hunting : DisposableBehaviour
 
     [Inject]
     public void Construct(LocationPresenter presenter, CombatPresenter combatPresenter,
-        InventoryPresenter inventoryPresenter)
+        InventoryPresenter inventoryPresenter, ChatPresenter chatPresenter)
     {
         mPresenter       = presenter;
         mCombatPresenter = combatPresenter;
         mInventoryPresenter = inventoryPresenter;
+        mChatPresenter = chatPresenter;
     }
 
     // ─── DisposableBehaviour ──────────────────────────────────────────────────
@@ -96,10 +93,23 @@ public class View_Hunting : DisposableBehaviour
             mButtonInventory.SubscribeOnClick(() => mInventoryPresenter.Open())
                 .DisposeWhenLifeEnded(this);
 
-#if DEV_BUILD
-        if (mRefreshButton != null)
-            mRefreshButton.SubscribeOnClick(OnRefreshClicked).DisposeWhenLifeEnded(this);
-#endif
+        // Кнопка «Чат» → открыть Panel_Chat поверх охоты
+        if (mButtonChat != null)
+            mButtonChat.SubscribeOnClick(() => mChatPresenter.Open())
+                .DisposeWhenLifeEnded(this);
+
+        // «Написать» из контекстного меню игрока → выбрать адресата лички и открыть чат.
+        // Плейн C#-событие (ContextMenuPopup — не Zenject-объект) — отписка в OnDispose.
+        if (mContextMenuPopup != null)
+            mContextMenuPopup.MessageClicked += OnPlayerMessageClicked;
+    }
+
+    protected override void OnDispose()
+    {
+        if (mContextMenuPopup != null)
+            mContextMenuPopup.MessageClicked -= OnPlayerMessageClicked;
+
+        base.OnDispose();
     }
 
     // ─── Мобы ─────────────────────────────────────────────────────────────────
@@ -152,10 +162,9 @@ public class View_Hunting : DisposableBehaviour
         mContextMenuPopup.Show(player, screenPosition);
     }
 
-#if DEV_BUILD
-    private void OnRefreshClicked()
+    private void OnPlayerMessageClicked(PlayerInLocationDto player)
     {
-        mPresenter.RefreshAsync(destroyCancellationToken).Forget();
+        mChatPresenter.SetPrivateTarget(player.CharacterId, player.Nickname);
+        mChatPresenter.Open();
     }
-#endif
 }

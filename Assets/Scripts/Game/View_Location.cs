@@ -26,7 +26,6 @@ public class View_Location : DisposableBehaviour
     [SerializeField] private TMP_Text mLocationNameLabel;
     [SerializeField] private TMP_Text mLocationLevelLabel;
     [SerializeField] private TMP_Text mTimerLabel;
-    [SerializeField] private TMP_Text mErrorLabel;
     [SerializeField] private GameObject mLoadingSpinner;
 
     // ─── Соседние локации ─────────────────────────────────────────────────────
@@ -42,6 +41,11 @@ public class View_Location : DisposableBehaviour
     [SerializeField] private Button mMapButton;
     /// <summary>Кнопка «Инвентарь» — открывает Panel_Inventory поверх локации.</summary>
     [SerializeField] private Button mInventoryButton;
+    /// <summary>Кнопка «Чат» — открывает Panel_Chat поверх локации.</summary>
+    [SerializeField] private Button mChatButton;
+    /// <summary>Кнопка «Выйти» — необязательна, добавляешь сам в редакторе и просто
+    /// перетаскиваешь сюда. Код клика уже готов (BindButtons ниже).</summary>
+    [SerializeField] private Button mLogoutButton;
 
     /// <summary>
     /// Основной контент локации (название, соседи, кнопки).
@@ -55,26 +59,22 @@ public class View_Location : DisposableBehaviour
     /// </summary>
     [SerializeField] private GameObject mPanelHunting;
 
-    // ─── DEV_BUILD ────────────────────────────────────────────────────────────
-
-#if DEV_BUILD
-    [Header("DEV — убрать в Фазе 5 (SignalR)")]
-    [SerializeField] private Button mRefreshButton;
-#endif
-
     // ─── Внутренний стейт ─────────────────────────────────────────────────────
 
     private LocationPresenter mPresenter;
     private InventoryPresenter mInventoryPresenter;
+    private ChatPresenter mChatPresenter;
     private readonly List<NeighborButtonView> mNeighborButtons = new();
 
     // ─── Zenject Inject ───────────────────────────────────────────────────────
 
     [Inject]
-    public void Construct(LocationPresenter presenter, InventoryPresenter inventoryPresenter)
+    public void Construct(LocationPresenter presenter, InventoryPresenter inventoryPresenter,
+        ChatPresenter chatPresenter)
     {
         mPresenter = presenter;
         mInventoryPresenter = inventoryPresenter;
+        mChatPresenter = chatPresenter;
     }
 
     // ─── DisposableBehaviour ──────────────────────────────────────────────────
@@ -107,13 +107,8 @@ public class View_Location : DisposableBehaviour
             })
             .DisposeWhenLifeEnded(this);
 
-        mPresenter.ErrorMessage
-            .SubscribeOnValueChanged(msg =>
-            {
-                mErrorLabel.text = msg;
-                mErrorLabel.gameObject.SetActive(!string.IsNullOrEmpty(msg));
-            })
-            .DisposeWhenLifeEnded(this);
+        // Ошибки локации теперь идут тостами через INotificationService (Фаза 5),
+        // не строкой в этом экране.
 
         mPresenter.IsLoading
             .SubscribeOnValueChanged(loading => mLoadingSpinner.SetActive(loading))
@@ -140,10 +135,13 @@ public class View_Location : DisposableBehaviour
             mInventoryButton.SubscribeOnClick(() => mInventoryPresenter.Open())
                 .DisposeWhenLifeEnded(this);
 
-#if DEV_BUILD
-        if (mRefreshButton != null)
-            mRefreshButton.SubscribeOnClick(OnRefreshClicked).DisposeWhenLifeEnded(this);
-#endif
+        if (mChatButton != null)
+            mChatButton.SubscribeOnClick(() => mChatPresenter.Open())
+                .DisposeWhenLifeEnded(this);
+
+        if (mLogoutButton != null)
+            mLogoutButton.SubscribeOnClick(() => mPresenter.LogoutAsync(destroyCancellationToken).Forget())
+                .DisposeWhenLifeEnded(this);
     }
 
     /// <summary>
@@ -201,8 +199,10 @@ public class View_Location : DisposableBehaviour
         if (mPanelHunting != null)
             mPanelHunting.SetActive(isHuntingOpen);
 
-        // При открытии охоты — обновляем данные (мобы/игроки могли измениться)
-        // TD-11: заменить на SignalR push в Фазе 5
+        // При открытии охоты — обновляем данные явным REST-запросом (подстраховка:
+        // основной источник живых обновлений мобов/игроков теперь SignalR, см.
+        // ILocationRealtimeService; этот вызов просто гарантирует свежий снимок
+        // на момент открытия панели, а не ждёт следующего пуша).
         if (isHuntingOpen)
             mPresenter.RefreshAsync(destroyCancellationToken).Forget();
     }
@@ -212,11 +212,4 @@ public class View_Location : DisposableBehaviour
         // TODO Фаза 2в: открыть View_Map
         Debug.Log("[View_Location] Карта — Фаза 2в");
     }
-
-#if DEV_BUILD
-    private void OnRefreshClicked()
-    {
-        mPresenter.RefreshAsync(destroyCancellationToken).Forget();
-    }
-#endif
 }

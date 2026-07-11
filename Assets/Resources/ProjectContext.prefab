@@ -75,3 +75,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   mApiConfig: {fileID: 11400000, guid: dbcad9d6522fbaf419e92baa6be4f715, type: 2}
+  mNotificationConfig: {fileID: 11400000, guid: 72eb98cc7b7396942b339f90a82dae9a, type: 2}
+  mRealtimeConfig: {fileID: 11400000, guid: 10d107c5b9f746e4aa3099ba9052825d, type: 2}
+  mChatConfig: {fileID: 11400000, guid: e36a804efc90a994dba2eaed4b6fa62c, type: 2}

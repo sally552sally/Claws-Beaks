@@ -13,7 +13,7 @@ using TMPro;
 /// Создаёт:
 ///   Panel_Inventory (View_Inventory) с вкладками, снаряжением, рюкзаком, сундуком, эффектами;
 ///   Popup_ItemDetail (детали + действия);
-///   Popup_Confirm (подтверждение выброса);
+///   (Popup_Confirm убран — подтверждения теперь через сервис уведомлений);
 ///   префабы Item_InvSlot / Item_StackRow / Button_Tab (в скрытом контейнере шаблонов).
 /// Назначает ВСЕ SerializeField через SerializedObject и проставляет ссылки в GameInstaller.
 ///
@@ -108,21 +108,8 @@ public static class InventorySetup
         hlgTabs.childForceExpandWidth = true;
         hlgTabs.childForceExpandHeight = true;
 
-        // Сообщения — фиксированная полоса сразу под вкладками (не сдвигает контент,
-        // когда появляется/пропадает: раньше это было в потоке VLG и «прыгало»).
-        var lblError = MakeTopBar("Label_Error", panel.transform, msgY, msgH, padSide)
-            .gameObject.AddComponent<TextMeshProUGUI>();
-        lblError.fontSize = 18;
-        lblError.alignment = TextAlignmentOptions.Center;
-        lblError.color = new Color(1f, 0.5f, 0.5f);
-        lblError.gameObject.SetActive(false);
-
-        var lblInfo = MakeTopBar("Label_Info", panel.transform, msgY, msgH, padSide)
-            .gameObject.AddComponent<TextMeshProUGUI>();
-        lblInfo.fontSize = 18;
-        lblInfo.alignment = TextAlignmentOptions.Center;
-        lblInfo.color = new Color(0.6f, 0.85f, 1f);
-        lblInfo.gameObject.SetActive(false);
+        // Полоса Label_Error/Label_Info убрана: сообщения инвентаря теперь идут тостами
+        // через INotificationService (панель Canvas_Notifications, Фаза 5).
 
         // Контент-область: заливка от низа вкладок до низа панели (не layout-group,
         // фиксированные отступы через offsetMin/offsetMax — предсказуемый размер).
@@ -246,24 +233,8 @@ public static class InventorySetup
 
         var bDetailClose = MakeButton("Button_DetailClose", detailGo.transform, "Закрыть");
 
-        // ── Popup_Confirm ──────────────────────────────────────────────────────
-        var confirmGo = MakeStretchPanel("Popup_Confirm", safeArea, new Color(0, 0, 0, 0.92f));
-        confirmGo.AddComponent<RectMask2D>();
-        confirmGo.SetActive(false);
-        var confirm = confirmGo.AddComponent<Popup_Confirm>();
-
-        var confirmVlg = confirmGo.AddComponent<VerticalLayoutGroup>();
-        confirmVlg.padding = new RectOffset(40, 40, 120, 40);
-        confirmVlg.spacing = 24;
-        confirmVlg.childAlignment = TextAnchor.MiddleCenter;
-        confirmVlg.childControlWidth = true;
-        confirmVlg.childForceExpandWidth = true;
-        confirmVlg.childControlHeight = false;
-
-        var cMsg = MakeLabel("Label_ConfirmMessage", confirmGo.transform, "Подтвердить?", 24);
-        var cRow = MakeHRow("Panel_ConfirmButtons", confirmGo.transform, 70);
-        var bConfirm = MakeButton("Button_Confirm", cRow.transform, "Да");
-        var bCancel = MakeButton("Button_Cancel", cRow.transform, "Отмена");
+        // Popup_Confirm убран: подтверждение выброса теперь идёт модальным диалогом
+        // сервиса уведомлений (INotificationService.ShowConfirm), см. Фаза 5.
 
         // ════════════════════════════════════════════════════════════════════
         // АВТО-НАЗНАЧЕНИЕ SerializeField
@@ -274,8 +245,6 @@ public static class InventorySetup
             var so = new SerializedObject(view);
             so.FindProperty("mButtonClose").objectReferenceValue = btnClose;
             so.FindProperty("mLabelBackpackCount").objectReferenceValue = lblBackpack;
-            so.FindProperty("mLabelError").objectReferenceValue = lblError;
-            so.FindProperty("mLabelInfo").objectReferenceValue = lblInfo;
             so.FindProperty("mSpinner").objectReferenceValue = spinner;
 
             so.FindProperty("mTabsContainer").objectReferenceValue = tabsRow.transform;
@@ -319,16 +288,6 @@ public static class InventorySetup
             so.FindProperty("mButtonWithdraw").objectReferenceValue = bWithdraw;
             so.FindProperty("mButtonDiscard").objectReferenceValue = bDiscard;
             so.FindProperty("mButtonClose").objectReferenceValue = bDetailClose;
-            so.FindProperty("mConfirmPopup").objectReferenceValue = confirm;
-            so.ApplyModifiedProperties();
-        }
-
-        // Popup_Confirm
-        {
-            var so = new SerializedObject(confirm);
-            so.FindProperty("mLabelMessage").objectReferenceValue = cMsg;
-            so.FindProperty("mButtonConfirm").objectReferenceValue = bConfirm;
-            so.FindProperty("mButtonCancel").objectReferenceValue = bCancel;
             so.ApplyModifiedProperties();
         }
 
@@ -357,7 +316,7 @@ public static class InventorySetup
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
             UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
 
-        Debug.Log("[InventorySetup] ✅ Готово! Panel_Inventory + Popup_ItemDetail + Popup_Confirm созданы.\n" +
+        Debug.Log("[InventorySetup] ✅ Готово! Panel_Inventory + Popup_ItemDetail созданы.\n" +
                   "Осталось вручную:\n" +
                   "  1. Поставь Panel_Inventory НИЖЕ Panel_Combat в иерархии (или меньший Sort Order),\n" +
                   "     чтобы бой перекрывал инвентарь.\n" +

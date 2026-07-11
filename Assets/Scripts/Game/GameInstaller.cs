@@ -19,11 +19,45 @@ public class GameInstaller : MonoInstaller
     [SerializeField] private View_Inventory   mInventoryView;
     [SerializeField] private Popup_ItemDetail mItemDetailPopup;
 
+    [Header("Чат")]
+    [SerializeField] private View_Chat mChatView;
+
+    [Header("Уведомления")]
+    [SerializeField] private View_Notifications mNotificationsView;
+
     public override void InstallBindings()
     {
+        InstallRealtime();
         InstallLocation();
         InstallCombat();
         InstallInventory();
+        InstallChat();
+        InstallNotifications();
+    }
+
+    // ─── Реалтайм (SignalR) ──────────────────────────────────────────────────────
+
+    private void InstallRealtime()
+    {
+        // Минимальный контекст "кто я" (CharacterId) — нужен LocationPresenter для
+        // самофильтрации CombatStarted. NonLazy: тянет /api/character сразу при старте
+        // сцены, параллельно с LocationPresenter.RefreshAsync.
+        Container.BindInterfacesAndSelfTo<CharacterContext>()
+            .AsSingle()
+            .NonLazy();
+
+        // Живые события локации (мобы/игроки/PvP/чат локации) через SignalR. NonLazy:
+        // соединение поднимается сразу при старте Game-сцены, не дожидаясь первого обращения.
+        Container.BindInterfacesAndSelfTo<LocationRealtimeService>()
+            .AsSingle()
+            .NonLazy();
+
+        // Живые сообщения торгового чата и лички через SignalR (второе соединение,
+        // /hubs/chat — сервер держит его отдельно от LocationHub, см. HubPaths).
+        // NonLazy: подписка на Trade/Personal идёт сразу, не только когда открыт чат.
+        Container.BindInterfacesAndSelfTo<ChatRealtimeService>()
+            .AsSingle()
+            .NonLazy();
     }
 
     // ─── Локация ──────────────────────────────────────────────────────────────
@@ -90,6 +124,43 @@ public class GameInstaller : MonoInstaller
 
         Container.Bind<Popup_ItemDetail>()
             .FromInstance(mItemDetailPopup)
+            .AsSingle();
+    }
+
+    // ─── Чат ──────────────────────────────────────────────────────────────────
+
+    private void InstallChat()
+    {
+        Container.Bind<IChatService>()
+            .To<ChatService>()
+            .AsSingle();
+
+        // Буфер сообщений (в памяти, не история с сервера). NonLazy: копит сообщения
+        // с самого старта сцены, не только пока открыта панель чата.
+        Container.BindInterfacesAndSelfTo<ChatHistoryService>()
+            .AsSingle()
+            .NonLazy();
+
+        // NonLazy: подписывается на ChatMessageReceived (оба realtime-сервиса) и на
+        // LocationPresenter.CurrentLocationId в конструкторе — должен существовать
+        // с самого старта сцены, иначе сообщения, пришедшие до открытия панели, потеряются.
+        Container.BindInterfacesAndSelfTo<ChatPresenter>()
+            .AsSingle()
+            .NonLazy();
+
+        Container.Bind<View_Chat>()
+            .FromInstance(mChatView)
+            .AsSingle();
+    }
+
+    // ─── Уведомления ────────────────────────────────────────────────────────────
+
+    private void InstallNotifications()
+    {
+        // Сервис (INotificationService) биндится на ProjectContext (ProjectInstaller).
+        // Здесь — только View сцены Game, которая его резолвит.
+        Container.Bind<View_Notifications>()
+            .FromInstance(mNotificationsView)
             .AsSingle();
     }
 }

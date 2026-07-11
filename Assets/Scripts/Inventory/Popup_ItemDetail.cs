@@ -13,7 +13,8 @@ using Zenject;
 ///   — chest    → «Достать».
 /// «Починить» — если прочность не полная и вещь не одноразово изношена (durability_max > 1).
 ///
-/// Выброс идёт через Popup_Confirm (необратимо). Логика — в InventoryPresenter.
+/// Выброс идёт через модальный диалог сервиса уведомлений (INotificationService.ShowConfirm),
+/// вызывается из InventoryPresenter.RequestDiscard. Логика — в InventoryPresenter.
 ///
 /// GameObject: Popup_ItemDetail (по умолчанию выключен; показывается по SelectedItem).
 /// </summary>
@@ -34,9 +35,6 @@ public sealed class Popup_ItemDetail : DisposableBehaviour
     [SerializeField] private Button mButtonWithdraw;
     [SerializeField] private Button mButtonDiscard;
     [SerializeField] private Button mButtonClose;
-
-    [Header("Подтверждение выброса")]
-    [SerializeField] private Popup_Confirm mConfirmPopup;
 
     private InventoryPresenter mPresenter;
     private InventoryItemDto mCurrent;
@@ -138,14 +136,8 @@ public sealed class Popup_ItemDetail : DisposableBehaviour
     private void OnDiscardClicked()
     {
         if (mCurrent == null) return;
-        long id = mCurrent.InstanceId;
-        string name = mCurrent.Name ?? mCurrent.Code ?? "предмет";
-
-        if (mConfirmPopup != null)
-            mConfirmPopup.Show($"Выбросить «{name}»? Действие необратимо.",
-                () => mPresenter.Discard(id));
-        else
-            mPresenter.Discard(id);   // на случай, если попап не назначен — без подтверждения
+        // Подтверждение и выброс — через презентер (модальный диалог сервиса уведомлений).
+        mPresenter.RequestDiscard(mCurrent.InstanceId, mCurrent.Name ?? mCurrent.Code ?? "предмет");
     }
 
     private static string BuildStats(InventoryItemDto i)
