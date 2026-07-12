@@ -349,6 +349,16 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         ResetCombatState();
     }
 
+    /// <summary>
+    /// Принудительно сбросить состояние боя без похода на сервер (воскрешение уже
+    /// произошло где-то в другом месте — см. LocationPresenter.ResurrectAsync).
+    /// TD-C29: раньше диалог воскрешения на экране локации закрывал боевой попап,
+    /// но не трогал CombatPresenter, и mIsInCombat/mIsFinished зависали до следующего
+    /// боя (спасал только явный сброс в EnterCombat). Теперь у каждого пути выхода
+    /// из боя есть свой явный вызов сброса состояния.
+    /// </summary>
+    public void ForceExitCombat() => ResetCombatState();
+
     // ─── Внутренняя логика ────────────────────────────────────────────────────
 
     private async UniTask LoadCombatDataAsync(CancellationToken ct)
@@ -417,9 +427,14 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
             mOpponentParticipantId = state.YourOpponent.ParticipantId;
         }
 
-        mIsMyTurn.Value = state.IsYourTurn && !state.Finished;
+        // TD-C29-2: выходим из боя не только когда закончилась ВСЯ сессия (state.Finished),
+        // но и когда лично умер участник — сессия при этом может продолжаться без нас
+        // (N×M — союзники ещё дерутся). См. Server/Combat/... CombatTurnEngine: пересват
+        // после смерти не завершает сессию, пока жив хоть кто-то на стороне.
+        bool exiting = state.Finished || (state.You != null && !state.You.IsAlive);
+        mIsMyTurn.Value = state.IsYourTurn && !exiting;
 
-        if (state.Finished) FinishCombat(state.WinnerSide);
+        if (exiting) FinishCombat(state.WinnerSide);
         else if (state.IsYourTurn) StartTimer(state.TurnDeadlineUtc);
     }
 
@@ -440,8 +455,8 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
             TrackComboProgress(direction, result.YourHit.WasComboFinisher);
         }
 
-        // ── 2. Если бой закончился нашим ударом — не ждём ────────────────────
-        if (result.Finished)
+        // ── 2. Если бой закончился (для сессии или лично для нас) нашим ударом — не ждём ──
+        if (result.Finished || (result.You != null && !result.You.IsAlive))
         {
             FinalizeFromResult(result);
             return;
@@ -480,7 +495,7 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
             mEnemyCurrentHp.Value = 0;
         }
 
-        if (result.Finished)
+        if (result.Finished || (result.You != null && !result.You.IsAlive))
         {
             FinishCombat(result.WinnerSide);
             return;

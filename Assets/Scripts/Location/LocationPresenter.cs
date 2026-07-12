@@ -77,6 +77,10 @@ public class LocationPresenter : DisposableObject, IInitializable
     private readonly IAuthService mAuthService;
     private readonly ISceneLoader mSceneLoader;
 
+    /// <summary>Нужен только для ForceExitCombat() при воскрешении через диалог
+    /// локации (TD-C29) — сам бой LocationPresenter не ведёт и не должен.</summary>
+    private readonly CombatPresenter mCombatPresenter;
+
     /// <summary>Диалог воскрешения уже показан и ждёт ответа — не дублировать при повторных Refresh.</summary>
     private bool mResurrectDialogPending;
 
@@ -88,7 +92,7 @@ public class LocationPresenter : DisposableObject, IInitializable
     [Inject]
     public LocationPresenter(ILocationService locationService, ICombatService combatService,
         INotificationService notifications, ILocationRealtimeService realtime, ICharacterContext characterContext,
-        IAuthService authService, ISceneLoader sceneLoader)
+        IAuthService authService, ISceneLoader sceneLoader, CombatPresenter combatPresenter)
     {
         mLocationService = locationService;
         mCombatService = combatService;
@@ -97,6 +101,7 @@ public class LocationPresenter : DisposableObject, IInitializable
         mCharacterContext = characterContext;
         mAuthService = authService;
         mSceneLoader = sceneLoader;
+        mCombatPresenter = combatPresenter;
 
         AutoDispose(
             mLocationName, mLocationLevel, mCanMove,
@@ -255,6 +260,12 @@ public class LocationPresenter : DisposableObject, IInitializable
         {
             await mCombatService.ResurrectAsync(ct);
             mResurrectDialogPending = false;
+
+            // TD-C29: этот путь воскрешения не проходит через CombatPresenter.ExitCombatAsync
+            // (у него своя кнопка OK на результате боя), поэтому флаги боя (IsInCombat и т.д.)
+            // без явного вызова оставались бы висеть до следующего EnterCombat.
+            mCombatPresenter.ForceExitCombat();
+
             await RefreshAsync(ct);
         }
         catch (OperationCanceledException) { }
