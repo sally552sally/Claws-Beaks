@@ -30,9 +30,9 @@ public struct BotLogEntry
     {
         var prefix = Level switch
         {
-            BotLogLevel.Step     => "▶",
-            BotLogLevel.Warn     => "⚠",
-            BotLogLevel.Error    => "✖",
+            BotLogLevel.Step => "▶",
+            BotLogLevel.Warn => "⚠",
+            BotLogLevel.Error => "✖",
             BotLogLevel.Snapshot => "📊",
             _ => "·"
         };
@@ -41,10 +41,10 @@ public struct BotLogEntry
 
     public static string ChannelRu(BotChannel channel) => channel switch
     {
-        BotChannel.Combat     => "Бой",
-        BotChannel.Inventory  => "Инвентарь",
+        BotChannel.Combat => "Бой",
+        BotChannel.Inventory => "Инвентарь",
         BotChannel.Navigation => "Переход",
-        BotChannel.Assert     => "Проверка",
+        BotChannel.Assert => "Проверка",
         _ => "Система"
     };
 }
@@ -55,10 +55,11 @@ public struct BotLogEntry
 /// </summary>
 public sealed class BotStats
 {
-    public int MobKills;       // побед над мобами
-    public int Wins;           // все победы
-    public int Losses;         // поражения
-    public int Deaths;         // смерти (HP<=0 → воскрешение в городе)
+    public int MobKills;       // побед над мобами (PvE)
+    public int PvpWins;        // побед над игроками (PvP)
+    public int Wins;           // все победы (MobKills + PvpWins)
+    public int Losses;         // поражения (PvE и PvP вместе)
+    public int Deaths;         // смерти (HP<=0 → воскрешение)
     public int Rejections;     // операции, отклонённые сервером
     public int Errors;         // упавшие шаги/исключения
     public int Fights;         // всего боёв начато
@@ -73,7 +74,7 @@ public sealed class BotStats
 
     public void Reset()
     {
-        MobKills = Wins = Losses = Deaths = Rejections = Errors = Fights = 0;
+        MobKills = PvpWins = Wins = Losses = Deaths = Rejections = Errors = Fights = 0;
         AssertsPassed = AssertsFailed = 0;
         TotalTurns = 0;
         FightSeconds = 0;
@@ -90,7 +91,7 @@ public sealed class BotStats
     public string Summary()
     {
         var sb = new StringBuilder();
-        sb.Append($"Бои: {Fights} | Победы: {Wins} | Убито: {MobKills} | Поражения: {Losses} | Смерти: {Deaths}");
+        sb.Append($"Бои: {Fights} | Победы: {Wins} (Убито: {MobKills}, PvP: {PvpWins}) | Поражения: {Losses} | Смерти: {Deaths}");
         sb.Append($" | Отказы: {Rejections} | Ошибки: {Errors}");
         sb.Append($" | Проверки: ✓{AssertsPassed} ✗{AssertsFailed}");
         if (Fights > 0)
@@ -170,19 +171,19 @@ public sealed class BotLog : IBotLog
         switch (level)
         {
             case BotLogLevel.Error: Debug.LogError($"[Bot] {message}"); break;
-            case BotLogLevel.Warn:  Debug.LogWarning($"[Bot] {message}"); break;
-            default:                Debug.Log($"[Bot] {message}"); break;
+            case BotLogLevel.Warn: Debug.LogWarning($"[Bot] {message}"); break;
+            default: Debug.Log($"[Bot] {message}"); break;
         }
     }
 
-    public void Info(string message)     => Write(BotChannel.System, BotLogLevel.Info, message);
-    public void Warn(string message)     => Write(BotChannel.System, BotLogLevel.Warn, message);
-    public void Error(string message)    => Write(BotChannel.System, BotLogLevel.Error, message);
-    public void Step(string message)     => Write(BotChannel.System, BotLogLevel.Step, message);
+    public void Info(string message) => Write(BotChannel.System, BotLogLevel.Info, message);
+    public void Warn(string message) => Write(BotChannel.System, BotLogLevel.Warn, message);
+    public void Error(string message) => Write(BotChannel.System, BotLogLevel.Error, message);
+    public void Step(string message) => Write(BotChannel.System, BotLogLevel.Step, message);
     public void Snapshot(string message) => Write(BotChannel.System, BotLogLevel.Snapshot, message);
 
-    public void Info(BotChannel channel, string message)  => Write(channel, BotLogLevel.Info, message);
-    public void Warn(BotChannel channel, string message)  => Write(channel, BotLogLevel.Warn, message);
+    public void Info(BotChannel channel, string message) => Write(channel, BotLogLevel.Info, message);
+    public void Warn(BotChannel channel, string message) => Write(channel, BotLogLevel.Warn, message);
     public void Error(BotChannel channel, string message) => Write(channel, BotLogLevel.Error, message);
 
     public void Clear()

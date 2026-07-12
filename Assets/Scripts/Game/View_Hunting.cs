@@ -20,12 +20,12 @@ public class View_Hunting : DisposableBehaviour
 
     [Header("Мобы")]
     [SerializeField] private RectTransform mMobsArea;
-    [SerializeField] private MobView       mMobViewPrefab;
+    [SerializeField] private MobView mMobViewPrefab;
 
     // ─── Игроки ───────────────────────────────────────────────────────────────
 
     [Header("Игроки")]
-    [SerializeField] private Transform      mPlayersContainer;
+    [SerializeField] private Transform mPlayersContainer;
     [SerializeField] private PlayerListItem mPlayerListItemPrefab;
 
     // ─── Попап действий ───────────────────────────────────────────────────────
@@ -51,11 +51,11 @@ public class View_Hunting : DisposableBehaviour
     // ─── Внутренний стейт ─────────────────────────────────────────────────────
 
     private LocationPresenter mPresenter;
-    private CombatPresenter   mCombatPresenter;
+    private CombatPresenter mCombatPresenter;
     private InventoryPresenter mInventoryPresenter;
     private ChatPresenter mChatPresenter;
 
-    private readonly List<MobView>        mMobViews    = new();
+    private readonly List<MobView> mMobViews = new();
     private readonly List<PlayerListItem> mPlayerItems = new();
 
     // ─── Zenject Inject ───────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ public class View_Hunting : DisposableBehaviour
     public void Construct(LocationPresenter presenter, CombatPresenter combatPresenter,
         InventoryPresenter inventoryPresenter, ChatPresenter chatPresenter)
     {
-        mPresenter       = presenter;
+        mPresenter = presenter;
         mCombatPresenter = combatPresenter;
         mInventoryPresenter = inventoryPresenter;
         mChatPresenter = chatPresenter;
@@ -99,15 +99,22 @@ public class View_Hunting : DisposableBehaviour
                 .DisposeWhenLifeEnded(this);
 
         // «Написать» из контекстного меню игрока → выбрать адресата лички и открыть чат.
+        // «Атаковать» → запросить PvP-бой (с подтверждением внутри CombatPresenter).
         // Плейн C#-событие (ContextMenuPopup — не Zenject-объект) — отписка в OnDispose.
         if (mContextMenuPopup != null)
+        {
             mContextMenuPopup.MessageClicked += OnPlayerMessageClicked;
+            mContextMenuPopup.AttackClicked += OnPlayerAttackClicked;
+        }
     }
 
     protected override void OnDispose()
     {
         if (mContextMenuPopup != null)
+        {
             mContextMenuPopup.MessageClicked -= OnPlayerMessageClicked;
+            mContextMenuPopup.AttackClicked -= OnPlayerAttackClicked;
+        }
 
         base.OnDispose();
     }
@@ -166,5 +173,10 @@ public class View_Hunting : DisposableBehaviour
     {
         mChatPresenter.SetPrivateTarget(player.CharacterId, player.Nickname);
         mChatPresenter.Open();
+    }
+
+    private void OnPlayerAttackClicked(PlayerInLocationDto player)
+    {
+        mCombatPresenter.RequestAttackPlayer(player.CharacterId, player.Nickname);
     }
 }

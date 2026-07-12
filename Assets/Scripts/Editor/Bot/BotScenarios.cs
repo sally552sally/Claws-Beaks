@@ -94,6 +94,32 @@ public static class BotScenarios
     }
 
     /// <summary>
+    /// PvP-дуэль с конкретным игроком по нику. Для теста на два процесса:
+    /// один клиент (этот, с ботом) стоит в локации, второй клиент — второй тестовый
+    /// аккаунт, зашедший в ту же локацию (Standalone-билд или второй Editor).
+    /// Ник вводится текстом (без выпадашки — цель не тянется с сервера заранее,
+    /// это живой второй игрок, а не статичные данные вроде локаций/сетов).
+    /// </summary>
+    public static BotScenario PvpDuel(BotParams p)
+    {
+        var nickname = p.Text("Ник противника", "");
+
+        var policy = new SimpleCombatPolicy
+        {
+            Stance = "Normal",
+            FollowCombo = true,
+            AutoHeal = true,
+            HealSlotIndex = 0,
+            HealBelowFraction = 0.4f
+        };
+
+        return Scenario("PvP-дуэль")
+            .AttackPlayer(nickname, policy)
+            .Snapshot("после PvP-боя")
+            .Build();
+    }
+
+    /// <summary>
     /// Регресс-тест сундука: положить сет → проверить, что он там → достать →
     /// проверить, что надет обратно. Пример превращения сценария в автотест.
     /// Запускать в локации с сундуком, с надетым сетом.

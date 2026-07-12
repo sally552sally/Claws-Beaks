@@ -8,14 +8,14 @@ using UnityEngine.UI;
 /// Создаётся динамически из префаба в View_Hunting.
 ///
 /// Кнопка [i] слева → View_Hunting показывает ContextMenuPopup рядом с кнопкой.
-/// Действия в меню: Профиль / Написать / Пригласить в группу (заглушки).
+/// Действия в меню: Профиль (заглушка) / Написать / Пригласить в группу (заглушка) / Атаковать (PvP).
 ///
 /// Prefab: Item_PlayerRow
 /// </summary>
 public class PlayerListItem : MonoBehaviour
 {
     [SerializeField] private TMP_Text mNicknameLabel;
-    [SerializeField] private Button   mInfoButton;
+    [SerializeField] private Button mInfoButton;
 
     private PlayerInLocationDto mPlayer;
 
@@ -38,7 +38,7 @@ public class PlayerListItem : MonoBehaviour
     /// </summary>
     public void Setup(PlayerInLocationDto player, Action<PlayerInLocationDto, Vector2> onInfoClicked)
     {
-        mPlayer        = player;
+        mPlayer = player;
         mOnInfoClicked = onInfoClicked;
 
         // Ник + уровень в скобках

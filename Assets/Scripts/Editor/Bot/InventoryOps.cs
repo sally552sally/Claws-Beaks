@@ -11,13 +11,27 @@ using Cysharp.Threading.Tasks;
 ///     авторитетно, await-абельно, без угадывания «загрузилось ли».
 ///   — МУТАЦИИ (надеть/снять/сундук/выброс) — через InventoryPresenter: так его
 ///     реактивное состояние остаётся когерентным и действия видны в UI.
-///     Мутации fire-and-forget → ждём IsLoading=false и читаем ErrorMessage
-///     (единственный способ узнать, что сервер отклонил операцию).
+///
+/// ПРОВЕРКА ИСХОДА МУТАЦИИ (важно, изменено при верификации после Фазы 5):
+///   Раньше отказ сервера читался из InventoryPresenter.ErrorMessage. Начиная с
+///   Фазы 5 (миграция на тосты, TD-C10) этого реактивного свойства больше нет —
+///   ошибки уходят прямо тостом через INotificationService и не оседают в
+///   состоянии презентора (см. RunMutation в InventoryPresenter: при исключении
+///   он вызывает ShowError и НЕ обновляет свои списки).
+///   Поэтому здесь используется другой авторитетный источник: после мутации
+///   заново запрашиваем IInventoryService (и сундук, если нужно) и сверяем поле
+///   Container конкретного предмета (backpack/equipped/chest) с тем, что должно
+///   было получиться. Если сервер отклонил операцию — Container не поменяется,
+///   и это видно напрямую, без парсинга текста ошибки.
 ///
 /// Пишет в канал Inventory; после каждой мутации — пауза (если включена).
 /// </summary>
 public static class InventoryOps
 {
+    private const string CONTAINER_EQUIPPED = "equipped";
+    private const string CONTAINER_BACKPACK = "backpack";
+    private const string CONTAINER_CHEST = "chest";
+
     // ─── Экипировка по сету / коду ────────────────────────────────────────────
 
     /// <summary>Надеть из рюкзака все вещи указанного сета (по SetId).</summary>
@@ -72,7 +86,7 @@ public static class InventoryOps
 
         foreach (var (id, name) in ids)
         {
-            var err = await MutateAsync(ctx, () => ctx.Inventory.Unequip(id));
+            var err = await MutateAsync(ctx, () => ctx.Inventory.Unequip(id), id, CONTAINER_BACKPACK);
             LogMutation(ctx, err, $"снял «{name}»", $"не снял «{name}»");
         }
     }
@@ -94,7 +108,7 @@ public static class InventoryOps
 
         foreach (var item in items)
         {
-            var err = await MutateAsync(ctx, () => ctx.Inventory.Deposit(item.InstanceId));
+            var err = await MutateAsync(ctx, () => ctx.Inventory.Deposit(item.InstanceId), item.InstanceId, CONTAINER_CHEST);
             LogMutation(ctx, err, $"в сундук: «{item.Name}»", $"не положил «{item.Name}»");
         }
     }
@@ -115,7 +129,7 @@ public static class InventoryOps
 
         foreach (var item in items)
         {
-            var err = await MutateAsync(ctx, () => ctx.Inventory.Withdraw(item.InstanceId));
+            var err = await MutateAsync(ctx, () => ctx.Inventory.Withdraw(item.InstanceId), item.InstanceId, CONTAINER_BACKPACK);
             LogMutation(ctx, err, $"из сундука: «{item.Name}»", $"не достал «{item.Name}»");
         }
     }
@@ -124,21 +138,23 @@ public static class InventoryOps
 
     private static async UniTask EquipOneAsync(BotContext ctx, long instanceId, string name)
     {
-        var err = await MutateAsync(ctx, () => ctx.Inventory.Equip(instanceId));
+        var err = await MutateAsync(ctx, () => ctx.Inventory.Equip(instanceId), instanceId, CONTAINER_EQUIPPED);
         LogMutation(ctx, err, $"надел «{name}»", $"не надел «{name}»");
     }
 
     /// <summary>
     /// Выполнить одну мутацию: дождаться простоя → выстрелить → дождаться завершения →
-    /// вернуть текст ошибки сервера (или null при успехе). После — пауза (если включена).
+    /// авторитетно проверить итог по Container предмета → вернуть текст ошибки (или null
+    /// при успехе). После — пауза (если включена).
     /// </summary>
-    private static async UniTask<string> MutateAsync(BotContext ctx, Action fire)
+    private static async UniTask<string> MutateAsync(
+        BotContext ctx, Action fire, long instanceId, string expectedContainer)
     {
         var inv = ctx.Inventory;
 
         await BotWait.Until(() => !inv.IsLoading.Value, BotConfig.INVENTORY_TIMEOUT, ctx.Ct);
 
-        fire(); // презентор синхронно ставит IsLoading=true и чистит ErrorMessage
+        fire(); // презентор синхронно ставит IsLoading=true
 
         bool done = await BotWait.Until(() => !inv.IsLoading.Value, BotConfig.INVENTORY_TIMEOUT, ctx.Ct);
 
@@ -146,8 +162,30 @@ public static class InventoryOps
 
         if (!done) return "таймаут операции";
 
-        var err = inv.ErrorMessage.Value;
-        return string.IsNullOrEmpty(err) ? null : err;
+        var actualContainer = await GetItemContainerAsync(ctx, instanceId);
+        if (actualContainer == expectedContainer) return null;
+
+        return actualContainer == null
+            ? "предмет не найден после операции (отклонён сервером?)"
+            : $"сервер отклонил операцию — предмет остался в «{actualContainer}»";
+    }
+
+    /// <summary>
+    /// Авторитетно узнать, где сейчас лежит предмет (backpack/equipped/chest).
+    /// null — предмет не нашёлся нигде (неожиданный случай, тоже трактуется как отказ).
+    /// </summary>
+    private static async UniTask<string> GetItemContainerAsync(BotContext ctx, long instanceId)
+    {
+        var inv = await ctx.InventoryService.GetInventoryAsync(ctx.Ct);
+        var item = inv.Equipped.FirstOrDefault(i => i.InstanceId == instanceId)
+                   ?? inv.Backpack.FirstOrDefault(i => i.InstanceId == instanceId);
+        if (item != null) return item.Container;
+
+        // Не нашли в рюкзаке/экипировке — проверяем сундук (актуально для Deposit/Withdraw).
+        var chest = await ctx.InventoryService.GetChestAsync(ctx.Ct);
+        var chestItem = (chest.Items ?? new List<InventoryItemDto>())
+            .FirstOrDefault(i => i.InstanceId == instanceId);
+        return chestItem?.Container;
     }
 
     private static void LogMutation(BotContext ctx, string error, string okMsg, string failMsg)

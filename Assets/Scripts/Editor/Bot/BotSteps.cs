@@ -187,6 +187,66 @@ public sealed class KillMobsStep : IBotStep
     }
 }
 
+/// <summary>
+/// Атаковать игрока по нику (PvP) и провести один бой. Ник ищется среди игроков,
+/// видимых прямо сейчас в текущей локации (ctx.Location.Players) — так же, как это
+/// делает игрок глазами в списке Охоты. Если игрока сейчас нет в локации — шаг НЕ
+/// ждёт и не ищет по карте (в отличие от KillMobsStep с респавном мобов): PvP-цель
+/// либо онлайн рядом прямо сейчас, либо атаки не будет — лог + шаг завершается.
+/// </summary>
+public sealed class AttackPlayerStep : IBotStep
+{
+    private readonly string mNickname;
+    private readonly ICombatPolicy mPolicy;
+
+    public AttackPlayerStep(string nickname, ICombatPolicy policy)
+    {
+        mNickname = nickname;
+        mPolicy = policy ?? new SimpleCombatPolicy();
+    }
+
+    public string Describe => $"Атаковать игрока «{mNickname}» [{mPolicy.Name}]";
+
+    public async UniTask ExecuteAsync(BotContext ctx)
+    {
+        await ctx.Location.RefreshAsync(ctx.Ct);
+        await BotWait.Until(() => !ctx.Location.IsLoading.Value, BotConfig.LOAD_TIMEOUT, ctx.Ct);
+
+        var target = (ctx.Location.Players.Value ?? new List<PlayerInLocationDto>())
+            .FirstOrDefault(p => string.Equals(p.Nickname, mNickname, StringComparison.OrdinalIgnoreCase));
+
+        if (target == null)
+        {
+            ctx.Log.Warn(BotChannel.Combat, $"Игрока «{mNickname}» нет в текущей локации — атака пропущена.");
+            return;
+        }
+
+        var outcome = await CombatOps.FightPlayerAsync(ctx, target.CharacterId, mPolicy);
+
+        switch (outcome)
+        {
+            case FightOutcome.Win:
+                ctx.Log.Info(BotChannel.Combat, $"PvP-бой против «{mNickname}» выигран.");
+                break;
+
+            case FightOutcome.Lost:
+                ctx.Log.Warn(BotChannel.Combat, $"PvP-бой против «{mNickname}» проигран.");
+                if (ctx.Options.StopOnDeath)
+                    ctx.RequestStop("смерть персонажа в PvP (включено «стоп при смерти»)");
+                break;
+
+            case FightOutcome.Rejected:
+                ctx.Log.Warn(BotChannel.Combat, $"Сервер отклонил PvP-атаку на «{mNickname}» " +
+                                                 "(цель вышла из локации/уже в бою/недоступна).");
+                break;
+
+            case FightOutcome.Timeout:
+                ctx.Log.Warn(BotChannel.Combat, $"PvP-бой против «{mNickname}» прерван по таймауту.");
+                break;
+        }
+    }
+}
+
 // ─── Инвентарь ────────────────────────────────────────────────────────────────
 
 /// <summary>Надеть сет по SetId.</summary>

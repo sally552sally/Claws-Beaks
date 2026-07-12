@@ -63,6 +63,18 @@ public sealed class BotScenarioBuilder
         return this;
     }
 
+    /// <summary>
+    /// Атаковать игрока по нику (PvP) и провести один бой. Цель ищется среди игроков
+    /// текущей локации в момент выполнения шага — если её там нет, атаки не будет
+    /// (лог + шаг завершится, сценарий не упадёт). policy — стратегия боя (null =
+    /// простая по умолчанию).
+    /// </summary>
+    public BotScenarioBuilder AttackPlayer(string nickname, ICombatPolicy policy = null)
+    {
+        mSteps.Add(new AttackPlayerStep(nickname, policy));
+        return this;
+    }
+
     // ─── Инвентарь ──────────────────────────────────────────────────────────────
 
     /// <summary>Надеть из рюкзака все вещи сета (по SetId).</summary>

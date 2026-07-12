@@ -1,28 +1,47 @@
+using System;
 using System.Diagnostics;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 
 /// <summary>Чем закончился бой.</summary>
 public enum FightOutcome
 {
     Win,        // победа
-    Lost,       // поражение (персонаж погиб → воскрешён в городе)
-    Rejected,   // сервер не дал начать бой (моб занят/бой запрещён/…)
+    Lost,       // поражение (персонаж погиб → воскрешён)
+    Rejected,   // сервер не дал начать бой (моб/игрок занят, недоступен, бой запрещён/…)
     Timeout     // бот не дождался хода/конца — прервано по таймауту
 }
 
 /// <summary>
-/// Провести ОДИН бой с мобом целиком. Вся возня с fire-and-forget командами и гвардами —
-/// здесь. Наружу — простой await с понятным результатом.
+/// Провести ОДИН бой целиком — против моба (PvE) или против игрока (PvP). Вся возня
+/// с fire-and-forget командами и гвардами — здесь. Наружу — простой await с понятным
+/// результатом. FightMobAsync/FightPlayerAsync отличаются только тем, КАК стартует
+/// бой (EngageMobAsync vs EngagePlayerAsync) — весь цикл ходов дальше общий: и стойки,
+/// и комбо, и расходка, и поражение/победа устроены одинаково для PvE и PvP.
 ///
 /// Схема одного хода = язык боя из диздока: опц. расходка → стойка → удар (или пропуск),
 /// затем ждём, пока сервер обработает ход (IsLoading вернётся в false).
+///
+/// PvP-нюанс: FightPlayerAsync минует клиентский диалог подтверждения
+/// (CombatPresenter.RequestAttackPlayer) — бот бьёт напрямую через EngagePlayerAsync,
+/// так же как остальные боевые/инвентарные операции бота обходят UI-confirm'ы.
 ///
 /// Пишет в канал Combat; считает ходы и время боя (BotStats); после каждого действия —
 /// пауза ctx.PauseAfterActionAsync() (если включена в настройках).
 /// </summary>
 public static class CombatOps
 {
-    public static async UniTask<FightOutcome> FightMobAsync(BotContext ctx, long spawnId, ICombatPolicy policy)
+    /// <summary>Провести бой с мобом по SpawnId.</summary>
+    public static UniTask<FightOutcome> FightMobAsync(BotContext ctx, long spawnId, ICombatPolicy policy)
+        => FightAsync(ctx, engageCt => ctx.Combat.EngageMobAsync(spawnId, engageCt).Forget(), policy, isPvp: false);
+
+    /// <summary>Провести PvP-бой с игроком по CharacterId.</summary>
+    public static UniTask<FightOutcome> FightPlayerAsync(BotContext ctx, long characterId, ICombatPolicy policy)
+        => FightAsync(ctx, engageCt => ctx.Combat.EngagePlayerAsync(characterId, engageCt).Forget(), policy, isPvp: true);
+
+    /// <summary>Общее ядро боя. engage — как именно стартовать (моб или игрок).</summary>
+    private static async UniTask<FightOutcome> FightAsync(
+        BotContext ctx, Action<CancellationToken> engage, ICombatPolicy policy, bool isPvp)
     {
         var combat = ctx.Combat;
         var ct = ctx.Ct;
@@ -37,7 +56,7 @@ public static class CombatOps
         var stopwatch = Stopwatch.StartNew();
 
         // ── Старт боя ────────────────────────────────────────────────────────
-        combat.EngageMobAsync(spawnId, ct).Forget();
+        engage(ct);
 
         await BotWait.Until(
             () => combat.IsInCombat.Value || !string.IsNullOrEmpty(combat.ErrorMessage.Value),
@@ -90,7 +109,7 @@ public static class CombatOps
             // Стойка + удар (или пропуск).
             combat.SetStance(move.Stance);
             if (move.Skip) combat.SkipAsync(ct).Forget();
-            else           combat.ActionAsync(move.Direction, ct).Forget();
+            else combat.ActionAsync(move.Direction, ct).Forget();
 
             ctx.Stats.TotalTurns++;
 
@@ -119,17 +138,19 @@ public static class CombatOps
         if (won)
         {
             ctx.Stats.Wins++;
-            ctx.Stats.MobKills++;
-            ctx.Log.Info(BotChannel.Combat, "Победа.");
+            if (isPvp) ctx.Stats.PvpWins++;
+            else ctx.Stats.MobKills++;
+            ctx.Log.Info(BotChannel.Combat, isPvp ? "PvP-победа." : "Победа.");
             return FightOutcome.Win;
         }
 
-        // Поражение. Если HP был <=0 — это смерть с воскрешением в городе.
+        // Поражение. Если HP был <=0 — это смерть с воскрешением
+        // (в городе для PvE, по правилам сервера — для PvP; клиент точку не знает).
         ctx.Stats.Losses++;
         if (myHp <= 0)
         {
             ctx.Stats.Deaths++;
-            ctx.Log.Warn(BotChannel.Combat, "Поражение: персонаж погиб и воскрешён в городе.");
+            ctx.Log.Warn(BotChannel.Combat, "Поражение: персонаж погиб и воскрешён.");
             return FightOutcome.Lost;
         }
 
