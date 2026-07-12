@@ -13,6 +13,8 @@ using Zenject;
 ///   — Лог пишет урон (наш / по нам), комбо-финишер, расходку
 ///   — ConsumeAsync: всегда делает GetStateAsync после применения → HP обновляется
 ///   — ApplyTurnResultAsync: async с паузой 1с перед ударом моба
+///   — RequestAttackPlayer/EngagePlayerAsync: старт PvP-боя (с подтверждением из UI,
+///     без него — для бота), дальше бой ведётся тем же кодом, что и с мобом
 /// </summary>
 public sealed class CombatPresenter : DisposableObject, IInitializable
 {
@@ -84,17 +86,31 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
     private readonly CancellationTokenSource mLifetimeCts = new();
 
     private readonly ICombatService mCombatService;
+    private readonly INotificationService mNotifications;
+    private readonly ILocationRealtimeService mRealtime;
+    private readonly ICharacterContext mCharacterContext;
 
     [Inject]
-    public CombatPresenter(ICombatService combatService)
+    public CombatPresenter(
+        ICombatService combatService, INotificationService notifications,
+        ILocationRealtimeService realtime, ICharacterContext characterContext)
     {
         mCombatService = combatService;
+        mNotifications = notifications;
+        mRealtime = realtime;
+        mCharacterContext = characterContext;
 
         AutoDispose(
             mIsInCombat, mIsMyTurn, mIsLoading, mIsFinished, mDidWin, mErrorMessage,
             mMyCurrentHp, mMyMaxHp, mEnemyCurrentHp, mEnemyMaxHp, mEnemyName, mSecondsLeft,
             mSelectedStance, mCurrentComboDisplay, mComboStep, mComboIndex,
             mLoadoutSlots, mCombatLogText);
+
+        // Жертва PvP-атаки узнаёт о бое через тот же CombatStartedEvent, что и
+        // LocationPresenter (там — тост, здесь — реальный вход в бой). TD-C18 закрыт:
+        // раньше combat-презентор жертвы никак не реагировал на это событие, и
+        // View_Combat (который сам реагирует на IsInCombat) просто не появлялся.
+        mRealtime.CombatStarted += OnCombatStarted;
     }
 
     // ─── IInitializable ───────────────────────────────────────────────────────
@@ -119,8 +135,25 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         catch (Exception ex) { Debug.LogWarning($"[CombatPresenter] TryResume: {ex.Message}"); }
     }
 
+    /// <summary>
+    /// PvP-бой начался где-то в локации (событие приходит всем, как и в LocationPresenter).
+    /// Реагируем, только если жертва — это мы. Дальше — тот же путь, что и авто-возобновление
+    /// после вылета: подтягиваем текущий бой с сервера и входим в него по-настоящему
+    /// (не просто тостом) — View_Combat сам появится, он реагирует на IsInCombat.
+    /// </summary>
+    private void OnCombatStarted(CombatStartedEvent e)
+    {
+        if (mCharacterContext.CharacterId.Value != e.DefenderCharacterId) return;
+        // Дедуп по конкретной сессии, а не по IsInCombat — тот может годами не сбрасываться
+        // в живом процессе, если игрок ни разу не нажал OK на результате (см. EnterCombat).
+        if (mIsInCombat.Value && mSessionId == e.CombatId) return;
+
+        TryResumeActiveCombatAsync(mLifetimeCts.Token).Forget();
+    }
+
     protected override void OnDispose()
     {
+        mRealtime.CombatStarted -= OnCombatStarted;
         mLifetimeCts.Cancel();
         mLifetimeCts.Dispose();
         mCombatCts?.Cancel();
@@ -152,6 +185,53 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         {
             mErrorMessage.Value = ex.Message;
             Debug.LogError($"[CombatPresenter] EngageMob: {ex}");
+        }
+        finally { mIsLoading.Value = false; }
+    }
+
+    /// <summary>
+    /// Запросить атаку игрока с подтверждением (PvP — необратимо, бой всегда до конца).
+    /// Показывает модальный диалог; при подтверждении вызывает EngagePlayerAsync.
+    /// Это единственная точка входа из UI — сам EngagePlayerAsync диалог не показывает,
+    /// чтобы его мог напрямую дёргать бот (см. CombatOps.FightPlayerAsync), минуя confirm,
+    /// как и остальные автоматизируемые команды бота.
+    /// </summary>
+    public void RequestAttackPlayer(long characterId, string nickname)
+    {
+        var name = string.IsNullOrEmpty(nickname) ? "игрока" : nickname;
+        mNotifications.ShowConfirm(
+            message: $"Напасть на «{name}»? Начнётся PvP-бой, отступить будет нельзя.",
+            onConfirm: () => EngagePlayerAsync(characterId).Forget(),
+            onCancel: null,
+            title: "Атаковать игрока",
+            confirmLabel: "Атаковать",
+            cancelLabel: "Отмена",
+            type: NotificationType.Warning);
+    }
+
+    /// <summary>Напасть на игрока по CharacterId (PvP). Зеркало EngageMobAsync.</summary>
+    public async UniTaskVoid EngagePlayerAsync(long characterId, CancellationToken viewCt = default)
+    {
+        if (mIsInCombat.Value || mIsLoading.Value) return;
+
+        mIsLoading.Value = true;
+        mErrorMessage.Value = string.Empty;
+
+        try
+        {
+            using var ct = LinkCts(viewCt);
+            await LoadCombatDataAsync(ct.Token);
+
+            var state = await mCombatService.EngagePlayerAsync(characterId, ct.Token);
+            mLogBuffer.Clear();
+            AddLog("<color=#AAAAAA>── PvP-бой начался ──</color>");
+            EnterCombat(state);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            mErrorMessage.Value = ex.Message;
+            Debug.LogError($"[CombatPresenter] EngagePlayer: {ex}");
         }
         finally { mIsLoading.Value = false; }
     }
@@ -291,6 +371,18 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
 
     private void EnterCombat(CombatStateResponse state)
     {
+        // Явно сбрасываем флаги ПРЕДЫДУЩЕГО боя перед применением нового состояния.
+        // Раньше это подразумевалось только через ResetCombatState() (вызывается по кнопке
+        // OK на результате) — но если игрок вышел из предыдущего боя другим путём (например,
+        // диалог воскрешения в LocationPresenter, который вообще не трогает CombatPresenter),
+        // mIsFinished/mDidWin оставались висеть true из старого боя. Новый бой на них
+        // натыкался: и OnCombatStarted-гвард по IsInCombat молчал навсегда, и — даже если бы
+        // резюм всё-таки случился — View_Combat сразу показал бы попап результата ПРЕДЫДУЩЕГО
+        // боя вместо начала нового.
+        mIsFinished.Value = false;
+        mDidWin.Value = false;
+        mErrorMessage.Value = string.Empty;
+
         mSessionId = state.SessionId;
 
         if (state.You != null)

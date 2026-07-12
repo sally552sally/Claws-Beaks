@@ -14,7 +14,8 @@ using UnityEngine.UI;
 ///
 /// Не часть Zenject-графа (простой SerializeField на View_Hunting, как и раньше) —
 /// сообщает о действиях через C#-события, владелец (View_Hunting) сам решает, что делать
-/// (см. MessageClicked → mChatPresenter.SetPrivateTarget + Open() в View_Hunting).
+/// (см. MessageClicked → mChatPresenter.SetPrivateTarget + Open() в View_Hunting;
+/// AttackClicked → mCombatPresenter.RequestAttackPlayer в View_Hunting).
 ///
 /// GameObject: PopupPlayerContext
 /// Overlay:    Overlay_ContextMenu (дочерний Canvas, перед PopupPlayerContext)
@@ -28,6 +29,9 @@ public class ContextMenuPopup : MonoBehaviour
     [SerializeField] private Button mProfileButton;
     [SerializeField] private Button mMessageButton;
     [SerializeField] private Button mInviteButton;
+    /// <summary>«Атаковать» (PvP) — единственное реальное боевое действие в этом меню,
+    /// остальные три — заглушки (Профиль/Пригласить) или отдельная фича (Написать).</summary>
+    [SerializeField] private Button mAttackButton;
 
     [Header("Оверлей (внешний объект в Canvas)")]
     /// <summary>
@@ -44,6 +48,9 @@ public class ContextMenuPopup : MonoBehaviour
     /// <summary>Кнопка «Написать» нажата для показанного игрока (Фаза 6 — чат).</summary>
     public event Action<PlayerInLocationDto> MessageClicked;
 
+    /// <summary>Кнопка «Атаковать» нажата для показанного игрока (PvP).</summary>
+    public event Action<PlayerInLocationDto> AttackClicked;
+
     private void Awake()
     {
         mSelfRect = GetComponent<RectTransform>();
@@ -52,6 +59,7 @@ public class ContextMenuPopup : MonoBehaviour
         mProfileButton.onClick.AddListener(OnProfileClicked);
         mMessageButton.onClick.AddListener(OnMessageClicked);
         mInviteButton.onClick.AddListener(OnInviteClicked);
+        mAttackButton.onClick.AddListener(OnAttackClicked);
         mOverlayButton.onClick.AddListener(Hide);
 
         gameObject.SetActive(false);
@@ -62,6 +70,7 @@ public class ContextMenuPopup : MonoBehaviour
         mProfileButton.onClick.RemoveListener(OnProfileClicked);
         mMessageButton.onClick.RemoveListener(OnMessageClicked);
         mInviteButton.onClick.RemoveListener(OnInviteClicked);
+        mAttackButton.onClick.RemoveListener(OnAttackClicked);
         mOverlayButton.onClick.RemoveListener(Hide);
     }
 
@@ -112,6 +121,12 @@ public class ContextMenuPopup : MonoBehaviour
     private void OnInviteClicked()
     {
         Debug.Log("[ContextMenuPopup] Пригласить в группу — заглушка Фазы 7");
+        Hide();
+    }
+
+    private void OnAttackClicked()
+    {
+        AttackClicked?.Invoke(mPlayer);
         Hide();
     }
 }
