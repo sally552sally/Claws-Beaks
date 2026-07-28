@@ -46,6 +46,19 @@ public class GameInstaller : MonoInstaller
             .AsSingle()
             .NonLazy();
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // WebGL: официальный SignalR-клиент несовместим с браузерным wasm-рантаймом
+        // (падает с "function signature mismatch" — HttpClient/потоки недоступны).
+        // До готовности jslib-моста живём на Null-заглушках — локация/чат работают
+        // только через REST, без live-пушей. Подробности — TD-C35 в PROGRESS_CLIENT.md.
+        Container.Bind<ILocationRealtimeService>()
+            .To<NullLocationRealtimeService>()
+            .AsSingle();
+
+        Container.Bind<IChatRealtimeService>()
+            .To<NullChatRealtimeService>()
+            .AsSingle();
+#else
         // Живые события локации (мобы/игроки/PvP/чат локации) через SignalR. NonLazy:
         // соединение поднимается сразу при старте Game-сцены, не дожидаясь первого обращения.
         Container.BindInterfacesAndSelfTo<LocationRealtimeService>()
@@ -58,6 +71,7 @@ public class GameInstaller : MonoInstaller
         Container.BindInterfacesAndSelfTo<ChatRealtimeService>()
             .AsSingle()
             .NonLazy();
+#endif
     }
 
     // ─── Локация ──────────────────────────────────────────────────────────────

@@ -14,6 +14,8 @@ using UnityEngine.UI;
 /// перемещается к случайной точке в пределах MobsArea.
 /// Анимация: плавное смещение через Lerp.
 /// Петля привязана к destroyCancellationToken — останавливается при Destroy().
+/// Дополнительно проверяет `this == null` после каждого await (гонка отмены токена
+/// vs фактического уничтожения объекта — токен долетает не всегда синхронно).
 ///
 /// Кнопка «Атаковать» вызывает mOnAttackClicked(SpawnId).
 /// Callback устанавливается из View_Hunting.RebuildMobs() через Setup().
@@ -104,6 +106,13 @@ public class MobView : MonoBehaviour
                     TimeSpan.FromSeconds(interval),
                     cancellationToken: ct);
 
+                // Destroy() мог случиться в кадре ДО того, как destroyCancellationToken
+                // реально отменится — известная гонка UniTask/Unity (отмена приходит не
+                // синхронно с уничтожением). Проверяем через `this == null` (перегруженный
+                // оператор UnityEngine.Object, true для уже уничтоженного объекта) — этого
+                // не даст просто ct.IsCancellationRequested, если токен ещё не «долетел».
+                if (this == null) return;
+
                 var startPos = mSelfRect.anchoredPosition;
                 var target   = GetRandomPosition();
                 float distance = Vector2.Distance(startPos, target);
@@ -116,6 +125,7 @@ public class MobView : MonoBehaviour
                     float t = Mathf.Clamp01(elapsed / duration);
                     mSelfRect.anchoredPosition = Vector2.Lerp(startPos, target, t);
                     await UniTask.NextFrame(ct);
+                    if (this == null) return;
                 }
 
                 mSelfRect.anchoredPosition = target;

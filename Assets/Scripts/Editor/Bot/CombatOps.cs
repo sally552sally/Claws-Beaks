@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Threading;
 using Cysharp.Threading.Tasks;
@@ -6,10 +6,11 @@ using Cysharp.Threading.Tasks;
 /// <summary>Чем закончился бой.</summary>
 public enum FightOutcome
 {
-    Win,        // победа
-    Lost,       // поражение (персонаж погиб → воскрешён)
-    Rejected,   // сервер не дал начать бой (моб/игрок занят, недоступен, бой запрещён/…)
-    Timeout     // бот не дождался хода/конца — прервано по таймауту
+    Win,         // победа
+    Lost,        // поражение (персонаж погиб → воскрешён)
+    Interrupted, // бой прерван сервером без победителя (истёк лимит длительности сессии)
+    Rejected,    // сервер не дал начать бой (моб/игрок занят, недоступен, бой запрещён/…)
+    Timeout      // бот не дождался хода/конца — прервано по таймауту
 }
 
 /// <summary>
@@ -123,7 +124,7 @@ public static class CombatOps
 
         // ── Итог ─────────────────────────────────────────────────────────────
         bool finished = combat.IsFinished.Value;
-        bool won = combat.DidWin.Value;
+        var outcome = combat.Outcome.Value;
         int myHp = combat.MyCurrentHp.Value;
 
         await ForceExitAsync(ctx); // выйти из боя (внутри воскресит, если HP<=0)
@@ -135,13 +136,22 @@ public static class CombatOps
         if (!finished)
             return FightOutcome.Timeout;
 
-        if (won)
+        if (outcome == CombatOutcome.Win)
         {
             ctx.Stats.Wins++;
             if (isPvp) ctx.Stats.PvpWins++;
             else ctx.Stats.MobKills++;
             ctx.Log.Info(BotChannel.Combat, isPvp ? "PvP-победа." : "Победа.");
             return FightOutcome.Win;
+        }
+
+        // Бой прерван сервером (истёк CombatConfig.MaxSessionMinutes) — это НЕ поражение:
+        // персонаж жив, HP сохранены, воскрешение не нужно. В статистику поражений не пишем,
+        // иначе долгие прогоны бота копили бы фантомные «проигрыши».
+        if (outcome == CombatOutcome.Interrupted)
+        {
+            ctx.Log.Warn(BotChannel.Combat, "Бой прерван сервером (истёк лимит длительности).");
+            return FightOutcome.Interrupted;
         }
 
         // Поражение. Если HP был <=0 — это смерть с воскрешением
@@ -158,13 +168,47 @@ public static class CombatOps
         return FightOutcome.Lost;
     }
 
-    /// <summary>Выйти из боя и дождаться сброса состояния (IsInCombat=false).</summary>
+    /// <summary>
+    /// Выйти из боя и дождаться сброса состояния (IsInCombat=false). Если персонаж погиб —
+    /// дополнительно эмулирует клик «Воскреснуть» на диалоге локации.
+    /// TD-C32: CombatPresenter.ExitCombatAsync больше не воскрешает сам (единственный путь
+    /// воскрешения теперь диалог «Вы мертвы»). Диалог закрывается ТОЛЬКО через
+    /// INotificationService.RespondToDialog — прямой вызов LocationPresenter.ResurrectAsync
+    /// воскресит персонажа на сервере, но оставит панель диалога висеть на экране,
+    /// потому что ничего не скажет NotificationService её закрыть.
+    /// </summary>
     private static async UniTask ForceExitAsync(BotContext ctx)
     {
         var combat = ctx.Combat;
         if (!combat.IsInCombat.Value) return;
 
+        // Снимаем ДО выхода из боя — ExitCombatAsync сбросит MyCurrentHp в 0 в любом случае.
+        bool needsResurrect = combat.MyCurrentHp.Value <= 0;
+
         combat.ExitCombatAsync(ctx.Ct).Forget();
         await BotWait.Until(() => !combat.IsInCombat.Value, BotConfig.EXIT_TIMEOUT, ctx.Ct);
+
+        if (!needsResurrect) return;
+
+        // Диалог всплывает асинхронно (после рефреша локации по событию CombatEnded),
+        // не мгновенно по сбросу боя — ждём, пока сервер реально подтвердит смерть.
+        bool awaitingResurrection = await BotWait.Until(
+            () => ctx.Location.IsAwaitingResurrection.Value, BotConfig.EXIT_TIMEOUT, ctx.Ct);
+
+        if (!awaitingResurrection)
+        {
+            ctx.Log.Warn(BotChannel.Combat,
+                "Ожидался диалог воскрешения (HP<=0), но IsAwaitingResurrection не пришёл вовремя.");
+            return;
+        }
+
+        ctx.Notifications.RespondToDialog(primary: true);
+
+        // RespondToDialog лишь запускает ResurrectAsync (fire-and-forget внутри диалога) —
+        // раньше вызывающий код получал гарантию, что к возврату из ForceExitAsync
+        // воскрешение уже завершилось на сервере. Сохраняем эту гарантию явным ожиданием,
+        // иначе следующий EngageMobAsync в сценарии рискует стартовать по мёртвому персонажу.
+        await BotWait.Until(
+            () => !ctx.Location.IsAwaitingResurrection.Value, BotConfig.EXIT_TIMEOUT, ctx.Ct);
     }
 }

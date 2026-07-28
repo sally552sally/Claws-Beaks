@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Cysharp.Threading.Tasks;
@@ -133,6 +133,17 @@ public sealed class KillMobsStep : IBotStep
                     }
                     break;
 
+                case FightOutcome.Interrupted:
+                    // Сервер прервал бой по лимиту длительности. Моб цел и снова свободен,
+                    // персонаж жив — продолжать фарм можно, но этот моб не засчитан.
+                    // Считаем как отказ, чтобы серия подряд не крутила цикл бесконечно.
+                    if (++rejectedInARow >= MAX_REJECTED_ATTEMPTS)
+                    {
+                        ctx.Log.Warn(BotChannel.Combat, "Слишком много прерванных боёв подряд — прерываю шаг.");
+                        return;
+                    }
+                    break;
+
                 case FightOutcome.Timeout:
                     ctx.Log.Warn(BotChannel.Combat, "Бой прерван по таймауту — прерываю шаг.");
                     return;
@@ -238,6 +249,11 @@ public sealed class AttackPlayerStep : IBotStep
             case FightOutcome.Rejected:
                 ctx.Log.Warn(BotChannel.Combat, $"Сервер отклонил PvP-атаку на «{mNickname}» " +
                                                  "(цель вышла из локации/уже в бою/недоступна).");
+                break;
+
+            case FightOutcome.Interrupted:
+                ctx.Log.Warn(BotChannel.Combat, $"PvP-бой против «{mNickname}» прерван сервером " +
+                                                 "(истёк лимит длительности боя), победителя нет.");
                 break;
 
             case FightOutcome.Timeout:
