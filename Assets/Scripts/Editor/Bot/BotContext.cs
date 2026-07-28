@@ -87,6 +87,13 @@ public sealed class BotContext
     public CombatPresenter    Combat    { get; }
     public InventoryPresenter Inventory { get; }
 
+    /// <summary>
+    /// Нужен, чтобы эмулировать клик по кнопке диалога (например «Воскреснуть»).
+    /// TD-C32: диалог закрывается ТОЛЬКО через RespondToDialog — прямой вызов
+    /// презентера воскрешает персонажа на сервере, но не закрывает саму панель.
+    /// </summary>
+    public INotificationService Notifications { get; }
+
     /// <summary>Сервис локаций — карта мира и авторитетное «где я сейчас».</summary>
     public ILocationService LocationService { get; }
 
@@ -112,6 +119,7 @@ public sealed class BotContext
     public BotContext(
         LocationPresenter location, CombatPresenter combat, InventoryPresenter inventory,
         ILocationService locationService, IInventoryService inventoryService,
+        INotificationService notifications,
         IBotLog log, BotStats stats, CancellationToken ct)
     {
         Location = location;
@@ -119,6 +127,7 @@ public sealed class BotContext
         Inventory = inventory;
         LocationService = locationService;
         InventoryService = inventoryService;
+        Notifications = notifications;
         Log = log;
         Stats = stats;
         Ct = ct;
@@ -198,9 +207,10 @@ public static class BotGameAccess
             var inventory = container.TryResolve<InventoryPresenter>();
             var locationService = container.TryResolve<ILocationService>();
             var inventoryService = container.TryResolve<IInventoryService>();
+            var notifications = container.TryResolve<INotificationService>();
 
             if (combat == null || inventory == null ||
-                locationService == null || inventoryService == null)
+                locationService == null || inventoryService == null || notifications == null)
             {
                 error = "Game-сцена найдена, но не все зависимости поднялись " +
                         "(бой/инвентарь/сервисы). Дождись полной загрузки сцены.";
@@ -209,7 +219,7 @@ public static class BotGameAccess
 
             context = new BotContext(
                 location, combat, inventory,
-                locationService, inventoryService,
+                locationService, inventoryService, notifications,
                 log, stats, ct);
             return true;
         }

@@ -114,6 +114,12 @@ public class LocationPresenter : DisposableObject, IInitializable
         mRealtime.PlayerLeft += OnPlayerLeft;
         mRealtime.CombatStarted += OnCombatStarted;
         mRealtime.Resynced += OnRealtimeResynced;
+
+        // TD-C32: раньше только смерть (через ResurrectAsync) обновляла локацию после
+        // боя — путь победы (Popup_CombatResult → ExitCombatAsync) никого не уведомлял,
+        // и данные локации (замок движения, состояние моба) оставались устаревшими до
+        // ручного действия. Теперь единая точка для обоих путей — см. OnCombatEnded.
+        mCombatPresenter.CombatEnded += OnCombatEnded;
     }
 
     // ─── IInitializable ───────────────────────────────────────────────────────
@@ -200,6 +206,24 @@ public class LocationPresenter : DisposableObject, IInitializable
 
     // ─── Внутренняя логика ────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Бой закончился (любой исход, любой путь выхода) — данные локации протухли
+    /// (замок движения, состояние моба), их нужно обновить. TD-C32.
+    ///   — Победа: остаёмся в панели охоты, рефреш тихий (без переключения панелей) —
+    ///     не заставляем игрока лишним кликом возвращаться в охоту после каждого моба.
+    ///   — Прерван (истёк лимит длительности боя): тоже остаёмся в охоте. Персонаж жив,
+    ///     стоит на месте и ничего не потерял — выкидывать его из охоты не за что.
+    ///   — Поражение: закрываем охоту. Воскрешение НЕ форсируем отсюда — если сервер
+    ///     ответит IsAwaitingResurrection=true, обычный путь (ApplyLocationData →
+    ///     ShowResurrectDialogIfNeeded) сам покажет диалог. Игрок вправе не воскресать
+    ///     сразу же (диалог никуда не торопит, просто блокирует остальной ввод).
+    /// </summary>
+    private void OnCombatEnded(CombatOutcome outcome)
+    {
+        if (outcome == CombatOutcome.Loss) CloseHunting();
+        RefreshAsync(mLifetimeCts.Token).Forget();
+    }
+
     private void ApplyLocationData(CurrentLocationResponse response)
     {
         mLocationName.Value = response.Name;
@@ -264,9 +288,9 @@ public class LocationPresenter : DisposableObject, IInitializable
             // TD-C29: этот путь воскрешения не проходит через CombatPresenter.ExitCombatAsync
             // (у него своя кнопка OK на результате боя), поэтому флаги боя (IsInCombat и т.д.)
             // без явного вызова оставались бы висеть до следующего EnterCombat.
+            // TD-C32: ForceExitCombat → ResetCombatState сам поднимет CombatEnded → сработает
+            // OnCombatEnded → RefreshAsync. Явный вызов здесь был бы дублирующим рефрешем.
             mCombatPresenter.ForceExitCombat();
-
-            await RefreshAsync(ct);
         }
         catch (OperationCanceledException) { }
         catch (ApiException ex)
@@ -351,8 +375,8 @@ public class LocationPresenter : DisposableObject, IInitializable
 
         mNotifications.ShowWarning($"{e.AttackerNickname} напал на вас!");
 
-        // Сюда намеренно НЕ добавлен автопереход в экран боя — это отдельная задача
-        // (нужна привязка CombatId к CombatPresenter), не в этом заходе.
+        // Автопереход в экран боя — не здесь. CombatPresenter сам подписан на то же
+        // событие и сам входит в бой (TD-C18, закрыт); тут только тост-предупреждение.
     }
 
     /// <summary>Соединение (пере)установлено — пропущенные за паузу дельты сервер не хранит,
@@ -446,6 +470,7 @@ public class LocationPresenter : DisposableObject, IInitializable
         mRealtime.PlayerLeft -= OnPlayerLeft;
         mRealtime.CombatStarted -= OnCombatStarted;
         mRealtime.Resynced -= OnRealtimeResynced;
+        mCombatPresenter.CombatEnded -= OnCombatEnded;
 
         StopTimer();
         mLifetimeCts.Cancel();

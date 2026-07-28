@@ -262,7 +262,15 @@ public sealed class View_Combat : DisposableBehaviour
 
     private void OnFinished(bool isFinished)
     {
-        if (isFinished && mResultPopup != null)
-            mResultPopup.Show(mPresenter.DidWin.Value);
+        if (mResultPopup == null) return;
+
+        if (isFinished)
+            mResultPopup.Show(mPresenter.Outcome.Value);
+        else
+            // Раньше здесь была только ветка показа: попап скрывался исключительно из
+            // собственной кнопки OK. Если бой сбрасывался мимо неё (новый бой поднят
+            // авто-возобновлением или PvP-нападением, ForceExitCombat из диалога
+            // воскрешения), попап оставался висеть поверх уже идущего нового боя.
+            mResultPopup.Hide();
     }
 }

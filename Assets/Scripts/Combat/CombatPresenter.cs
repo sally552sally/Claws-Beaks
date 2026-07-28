@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -28,7 +28,7 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
     private readonly Reactive<bool> mIsMyTurn = new(false);
     private readonly Reactive<bool> mIsLoading = new(false);
     private readonly Reactive<bool> mIsFinished = new(false);
-    private readonly Reactive<bool> mDidWin = new(false);
+    private readonly Reactive<CombatOutcome> mOutcome = new(CombatOutcome.None);
     private readonly Reactive<string> mErrorMessage = new(string.Empty);
 
     private readonly Reactive<int> mMyCurrentHp = new(0);
@@ -51,7 +51,9 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
     public ReadonlyReactive<bool> IsMyTurn => mIsMyTurn.Readonly;
     public ReadonlyReactive<bool> IsLoading => mIsLoading.Readonly;
     public ReadonlyReactive<bool> IsFinished => mIsFinished.Readonly;
-    public ReadonlyReactive<bool> DidWin => mDidWin.Readonly;
+
+    /// <summary>Исход завершённого боя. Валиден, пока IsFinished = true.</summary>
+    public ReadonlyReactive<CombatOutcome> Outcome => mOutcome.Readonly;
     public ReadonlyReactive<string> ErrorMessage => mErrorMessage.Readonly;
 
     public ReadonlyReactive<int> MyCurrentHp => mMyCurrentHp.Readonly;
@@ -67,6 +69,17 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
     public ReadonlyReactive<int> ComboIndex => mComboIndex.Readonly;
     public ReadonlyReactive<List<CombatLoadoutSlotDto>> LoadoutSlots => mLoadoutSlots.Readonly;
     public ReadonlyReactive<string> CombatLogText => mCombatLogText.Readonly;
+
+    // ─── Публичные события ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Бой завершён и состояние сброшено (после любого пути выхода — кнопка OK на
+    /// результате, ForceExitCombat). Аргумент — исход ЭТОГО боя, а не текущее значение
+    /// Outcome (оно к моменту вызова уже обнулено сбросом).
+    /// TD-C32: единая точка для LocationPresenter — понять, что бой закончился,
+    /// и обновить данные локации (при поражении также закрыть панель охоты).
+    /// </summary>
+    public event Action<CombatOutcome> CombatEnded;
 
     // ─── Внутреннее состояние ─────────────────────────────────────────────────
 
@@ -101,7 +114,7 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         mCharacterContext = characterContext;
 
         AutoDispose(
-            mIsInCombat, mIsMyTurn, mIsLoading, mIsFinished, mDidWin, mErrorMessage,
+            mIsInCombat, mIsMyTurn, mIsLoading, mIsFinished, mOutcome, mErrorMessage,
             mMyCurrentHp, mMyMaxHp, mEnemyCurrentHp, mEnemyMaxHp, mEnemyName, mSecondsLeft,
             mSelectedStance, mCurrentComboDisplay, mComboStep, mComboIndex,
             mLoadoutSlots, mCombatLogText);
@@ -334,19 +347,18 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         RebuildComboDisplay();
     }
 
-    public async UniTaskVoid ExitCombatAsync(CancellationToken viewCt = default)
+    /// <summary>
+    /// Выйти из боя по кнопке OK на результате. Воскрешение сюда больше не входит
+    /// (TD-C32) — при поражении персонаж остаётся мёртвым до явного действия в диалоге
+    /// «Вы мертвы» на экране локации (см. LocationPresenter.ShowResurrectDialogIfNeeded).
+    /// Раньше воскрешение было здесь и молча срабатывало сразу по OK — так игрок не мог
+    /// осознанно решить, воскресать ли ему прямо сейчас (единый путь воскрешения — сам
+    /// диалог, а не эта кнопка).
+    /// </summary>
+    public UniTaskVoid ExitCombatAsync(CancellationToken viewCt = default)
     {
-        if (mMyCurrentHp.Value <= 0)
-        {
-            try
-            {
-                using var ct = LinkCts(viewCt);
-                await mCombatService.ResurrectAsync(ct.Token);
-            }
-            catch (Exception ex) { Debug.LogError($"[CombatPresenter] Resurrect: {ex}"); }
-        }
-
         ResetCombatState();
+        return default;
     }
 
     /// <summary>
@@ -385,12 +397,12 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         // Раньше это подразумевалось только через ResetCombatState() (вызывается по кнопке
         // OK на результате) — но если игрок вышел из предыдущего боя другим путём (например,
         // диалог воскрешения в LocationPresenter, который вообще не трогает CombatPresenter),
-        // mIsFinished/mDidWin оставались висеть true из старого боя. Новый бой на них
+        // mIsFinished/mOutcome оставались висеть из старого боя. Новый бой на них
         // натыкался: и OnCombatStarted-гвард по IsInCombat молчал навсегда, и — даже если бы
         // резюм всё-таки случился — View_Combat сразу показал бы попап результата ПРЕДЫДУЩЕГО
         // боя вместо начала нового.
         mIsFinished.Value = false;
-        mDidWin.Value = false;
+        mOutcome.Value = CombatOutcome.None;
         mErrorMessage.Value = string.Empty;
 
         mSessionId = state.SessionId;
@@ -434,7 +446,13 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         bool exiting = state.Finished || (state.You != null && !state.You.IsAlive);
         mIsMyTurn.Value = state.IsYourTurn && !exiting;
 
-        if (exiting) FinishCombat(state.WinnerSide);
+        // Сессия могла завершиться не победой кого-то, а прерыванием (истёк лимит длительности
+        // боя / прерван бой в данже) — сервер отдаёт это в state, отдельно от winnerSide.
+        // Важно: наша собственная смерть при живой сессии прерыванием не является, поэтому
+        // interrupted учитываем только когда завершилась вся сессия.
+        bool interrupted = state.Finished && IsInterrupted(state.State);
+
+        if (exiting) FinishCombat(state.WinnerSide, interrupted);
         else if (state.IsYourTurn) StartTimer(state.TurnDeadlineUtc);
     }
 
@@ -497,7 +515,10 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
 
         if (result.Finished || (result.You != null && !result.You.IsAlive))
         {
-            FinishCombat(result.WinnerSide);
+            // interrupted: false — прерывание никогда не приходит результатом хода. Сервер
+            // ловит истечение сессии ДО обработки хода: на SubmitAction кидает CombatException,
+            // на таймауте возвращает null. Прерванный бой клиент узнаёт только из GetState.
+            FinishCombat(result.WinnerSide, interrupted: false);
             return;
         }
 
@@ -525,32 +546,53 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
             mEnemyCurrentHp.Value = 0;
         }
 
-        FinishCombat(result.WinnerSide);
+        FinishCombat(result.WinnerSide, interrupted: false); // см. пояснение в ApplyTurnResult
     }
 
-    private void FinishCombat(string winnerSide)
+    /// <summary>Строка state из ответа сервера означает прерванный бой (combat_state.interrupted).</summary>
+    private static bool IsInterrupted(string state) =>
+        string.Equals(state, "Interrupted", StringComparison.OrdinalIgnoreCase);
+
+    private void FinishCombat(string winnerSide, bool interrupted)
     {
         StopTimer();
 
-        bool won;
-        if (!string.IsNullOrEmpty(winnerSide) && !string.IsNullOrEmpty(mMySide))
-            won = winnerSide == mMySide;
+        // Порядок важен: прерывание проверяем ПЕРВЫМ. У прерванной сессии победителя нет
+        // вовсе, и раньше она проваливалась в ветку догадки по HP ниже, где «оба живы»
+        // читалось как поражение — живой персонаж с полным HP видел «Поражение...».
+        CombatOutcome outcome;
+        if (interrupted)
+            outcome = CombatOutcome.Interrupted;
+        else if (!string.IsNullOrEmpty(winnerSide) && !string.IsNullOrEmpty(mMySide))
+            outcome = winnerSide == mMySide ? CombatOutcome.Win : CombatOutcome.Loss;
         else
-            won = mMyCurrentHp.Value > 0 && mEnemyCurrentHp.Value <= 0;
+            // Победитель неизвестен, а бой не помечен прерванным: единственный штатный случай —
+            // наша смерть при продолжающейся сессии (N×M, союзники ещё дерутся). Для нас это
+            // поражение независимо от HP противника, поэтому прежняя догадка «мой HP > 0 и
+            // вражеский <= 0» здесь больше не нужна — она и давала ложные исходы.
+            outcome = CombatOutcome.Loss;
 
-        Debug.Log($"[Combat] Finish: winner={winnerSide} side={mMySide} myHP={mMyCurrentHp.Value} enemyHP={mEnemyCurrentHp.Value} → {(won ? "ПОБЕДА" : "ПОРАЖЕНИЕ")}");
+        Debug.Log($"[Combat] Finish: winner={winnerSide} interrupted={interrupted} side={mMySide} myHP={mMyCurrentHp.Value} enemyHP={mEnemyCurrentHp.Value} → {outcome}");
 
-        AddLog(won
-            ? "<color=#FFD700>══ Победа! ══</color>"
-            : "<color=#FF6666>══ Поражение... ══</color>");
+        AddLog(outcome switch
+        {
+            CombatOutcome.Win => "<color=#FFD700>══ Победа! ══</color>",
+            CombatOutcome.Interrupted => "<color=#AAAAAA>══ Бой прерван ══</color>",
+            _ => "<color=#FF6666>══ Поражение... ══</color>"
+        });
 
         mIsMyTurn.Value = false;
-        mDidWin.Value = won;
+        mOutcome.Value = outcome;
         mIsFinished.Value = true;
     }
 
     private void ResetCombatState()
     {
+        // Снимаем исход ДО сброса флагов — mOutcome.Value ниже обнулится вместе со всем
+        // остальным состоянием, а подписчикам (LocationPresenter) нужен именно исход
+        // только что завершившегося боя, не дефолтное значение после сброса.
+        var outcome = mOutcome.Value;
+
         StopTimer();
         mCombatCts?.Cancel();
         mCombatCts?.Dispose();
@@ -559,7 +601,7 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         mIsInCombat.Value = false;
         mIsMyTurn.Value = false;
         mIsFinished.Value = false;
-        mDidWin.Value = false;
+        mOutcome.Value = CombatOutcome.None;
         mIsLoading.Value = false;
         mErrorMessage.Value = string.Empty;
         mMyCurrentHp.Value = 0;
@@ -574,6 +616,8 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         mComboStep.Value = 0;
         mLogBuffer.Clear();
         mCombatLogText.Value = string.Empty;
+
+        CombatEnded?.Invoke(outcome);
     }
 
     // ─── Polling ──────────────────────────────────────────────────────────────

@@ -93,13 +93,12 @@ public class AuthPresenter : DisposableObject, IInitializable
 
             await mSceneLoader.LoadAsync(SceneNames.GAME, ct);
         }
-        catch (ApiException ex) when (ex.StatusCode == 403)
-        {
-            mBanMessage.Value = ex.ServerError;
-        }
         catch (ApiException ex)
         {
-            mNotifications.ShowError(ex.ServerError);
+            if (ex.StatusCode == 403)
+                mBanMessage.Value = ex.ServerError;
+            else
+                mNotifications.ShowError(ex.ServerError);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
