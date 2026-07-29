@@ -53,6 +53,22 @@ public sealed class CombatService : ICombatService
         }
     }
 
+    /// <inheritdoc />
+    public async UniTask<LastBattleRewardResponse> GetLastRewardAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            // Сервер возвращает null, если наград ещё не было → Newtonsoft даст null-ссылку.
+            return await mClient.GetAsync<LastBattleRewardResponse>("/api/combat/last-reward", ct);
+        }
+        catch (Exception)
+        {
+            // Нет сети / 4xx — окно награды просто не откроется. Ронять из-за этого экран нельзя:
+            // награда уже начислена на сервере, а показ — вещь необязательная.
+            return null;
+        }
+    }
+
     public UniTask ResurrectAsync(CancellationToken ct = default) =>
         mClient.PostAsync("/api/combat/resurrect", new { }, ct);
 

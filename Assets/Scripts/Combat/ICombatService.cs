@@ -31,6 +31,17 @@ public interface ICombatService
     /// </summary>
     UniTask<CombatStateResponse> GetCurrentAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Награда за последний бой персонажа — для повторного открытия окна результатов.
+    /// <para>
+    /// Награда приходит в ответе на добивающий ход ровно один раз. Если он не доехал (обрыв
+    /// связи, сворачивание приложения, вылет), золото и вещи уже начислены, но показать их было
+    /// бы нечем. Сервер хранит снимок, поэтому перечитать можно в любой момент.
+    /// </para>
+    /// <para>Возвращает null, если персонаж ещё не получал награду ни за один бой.</para>
+    /// </summary>
+    UniTask<LastBattleRewardResponse> GetLastRewardAsync(CancellationToken ct = default);
+
     /// <summary>Воскресить персонажа после поражения.</summary>
     UniTask ResurrectAsync(CancellationToken ct = default);
 

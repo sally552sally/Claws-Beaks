@@ -56,7 +56,7 @@ public class DisposableBehaviour : MonoBehaviour, IDisposable, ILifeScope
         LifeEnd = null;
     }
 
-    private void OnDestroy()
+    protected virtual void OnDestroy()
     {
         Dispose();
     }

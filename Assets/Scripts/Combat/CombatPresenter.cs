@@ -47,6 +47,20 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
     /// <summary>Rich-text строка лога боя. Показывается в CombatLogView.</summary>
     private readonly Reactive<string> mCombatLogText = new(string.Empty);
 
+    // ─── Награда за бой ───────────────────────────────────────────────────────
+    // ВАЖНО: эти два поля живут ДОЛЬШЕ остального боевого состояния и намеренно НЕ сбрасываются
+    // в ResetCombatState(). Порядок событий такой: сервер отдаёт награду в ответе на добивающий
+    // ход → бой помечается завершённым → игрок смотрит попап результата → жмёт OK → только тогда
+    // вызывается ResetCombatState(). Если чистить награду вместе со всем остальным, она исчезнет
+    // ровно в тот момент, когда попап её показывает. Чистятся при СТАРТЕ следующего боя
+    // (EnterCombat) — по той же схеме, что mOutcome/mIsFinished.
+
+    /// <summary>Награда за последний бой. null — награды не было (или бой ещё идёт).</summary>
+    private readonly Reactive<CombatRewardView> mLastReward = new(null);
+
+    /// <summary>Повышение уровня за последний бой. null — уровень не менялся.</summary>
+    private readonly Reactive<CombatLevelUpView> mLastLevelUp = new(null);
+
     public ReadonlyReactive<bool> IsInCombat => mIsInCombat.Readonly;
     public ReadonlyReactive<bool> IsMyTurn => mIsMyTurn.Readonly;
     public ReadonlyReactive<bool> IsLoading => mIsLoading.Readonly;
@@ -69,6 +83,18 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
     public ReadonlyReactive<int> ComboIndex => mComboIndex.Readonly;
     public ReadonlyReactive<List<CombatLoadoutSlotDto>> LoadoutSlots => mLoadoutSlots.Readonly;
     public ReadonlyReactive<string> CombatLogText => mCombatLogText.Readonly;
+
+    /// <summary>
+    /// Награда за последний бой (золото, опыт, выпавшие вещи, следы «Запаса сил»).
+    /// null — награды не было: бой не завершён, завершён не победой, или моба добил союзник
+    /// (в N×M награда идёт тому, кто бил его лично). Пустая награда и отсутствие награды —
+    /// разные вещи, поэтому здесь именно null, а не объект с нулями.
+    /// Валидна с момента завершения боя и до старта следующего.
+    /// </summary>
+    public ReadonlyReactive<CombatRewardView> LastReward => mLastReward.Readonly;
+
+    /// <summary>Повышение уровня за последний бой. null — уровень не менялся.</summary>
+    public ReadonlyReactive<CombatLevelUpView> LastLevelUp => mLastLevelUp.Readonly;
 
     // ─── Публичные события ────────────────────────────────────────────────────
 
@@ -117,7 +143,7 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
             mIsInCombat, mIsMyTurn, mIsLoading, mIsFinished, mOutcome, mErrorMessage,
             mMyCurrentHp, mMyMaxHp, mEnemyCurrentHp, mEnemyMaxHp, mEnemyName, mSecondsLeft,
             mSelectedStance, mCurrentComboDisplay, mComboStep, mComboIndex,
-            mLoadoutSlots, mCombatLogText);
+            mLoadoutSlots, mCombatLogText, mLastReward, mLastLevelUp);
 
         // Жертва PvP-атаки узнаёт о бое через тот же CombatStartedEvent, что и
         // LocationPresenter (там — тост, здесь — реальный вход в бой). TD-C18 закрыт:
@@ -405,6 +431,12 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         mOutcome.Value = CombatOutcome.None;
         mErrorMessage.Value = string.Empty;
 
+        // Награда прошлого боя живёт дольше остального состояния (ResetCombatState её не трогает,
+        // иначе она исчезла бы прямо под открытым попапом результата). Единственная точка,
+        // где её корректно снимать, — старт следующего боя.
+        mLastReward.Value = null;
+        mLastLevelUp.Value = null;
+
         mSessionId = state.SessionId;
 
         if (state.You != null)
@@ -465,6 +497,11 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
     private async UniTask ApplyTurnResultAsync(
         CombatTurnResultResponse result, string direction, CancellationToken ct)
     {
+        // ── 0. Награда ───────────────────────────────────────────────────────
+        // Снимаем ДО любых ранних выходов: ниже есть return на «бой закончился нашим ударом»,
+        // и именно в этом ответе награда обычно и приходит.
+        CaptureReward(result.Reward, result.LevelUp);
+
         // ── 1. Наш удар ──────────────────────────────────────────────────────
         if (result.YourHit != null)
         {
@@ -584,6 +621,73 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
         mIsMyTurn.Value = false;
         mOutcome.Value = outcome;
         mIsFinished.Value = true;
+
+        // Победа есть, а награды нет — значит ответ на добивающий ход до нас не доехал (обрыв,
+        // сворачивание приложения) и о конце боя мы узнали из GetState, где награды нет вовсе.
+        // Дочитываем снимок с сервера: он пишется в транзакции выдачи лута и доступен всегда.
+        if (outcome == CombatOutcome.Win && mLastReward.Value == null)
+            TryRestoreLastRewardAsync(mSessionId, mLifetimeCts.Token).Forget();
+    }
+
+    /// <summary>
+    /// Запомнить награду из ответа сервера. null-награда — штатный случай (бой не завершён,
+    /// завершён не победой, или моба добил союзник), затирать ею уже показанную награду нельзя:
+    /// после победы приходят ещё и опросы состояния, и они бы её смыли.
+    /// </summary>
+    private void CaptureReward(CombatRewardView reward, CombatLevelUpView levelUp)
+    {
+        if (reward != null)
+        {
+            mLastReward.Value = reward;
+            int itemCount = reward.Items?.Count ?? 0;
+            Debug.Log($"[Combat] Награда доехала: золото={reward.Gold} опыт={reward.Experience} " +
+                      $"предметов={itemCount} запасСил={reward.RestedBonusApplied} " +
+                      $"зарядовОсталось={reward.RestedChargesLeft}");
+
+            if (reward.Items != null)
+                foreach (var item in reward.Items)
+                    Debug.Log($"[Combat] Дроп: {item.Name} ×{item.Quantity} ({item.Rarity}, id={item.TemplateId})");
+        }
+
+        if (levelUp != null)
+        {
+            mLastLevelUp.Value = levelUp;
+            Debug.Log($"[Combat] Левелап: {levelUp.OldLevel} → {levelUp.NewLevel}");
+        }
+    }
+
+    /// <summary>
+    /// Дочитать награду за завершившийся бой, если она не пришла в ответе на ход.
+    /// Тихая операция: не вышло — просто нет окна награды, ронять экран из-за этого нельзя
+    /// (золото и вещи на сервере уже начислены независимо от того, показали мы их или нет).
+    /// </summary>
+    private async UniTaskVoid TryRestoreLastRewardAsync(long sessionId, CancellationToken ct)
+    {
+        try
+        {
+            var snapshot = await mCombatService.GetLastRewardAsync(ct);
+            if (snapshot?.Reward == null)
+                return;
+
+            // Снимок хранится один на персонажа и перетирается следующим боем. Если id боя не
+            // совпал — это награда за ДРУГОЙ бой (например, мы уже успели подраться снова),
+            // показывать её как итог текущего нельзя.
+            if (snapshot.SessionId != sessionId)
+            {
+                Debug.Log($"[Combat] Снимок награды от боя {snapshot.SessionId} — не наш ({sessionId}), пропускаем.");
+                return;
+            }
+
+            // Гвард от гонки: пока шёл запрос, игрок мог начать новый бой (EnterCombat чистит
+            // награду). Дописывать в него итоги прошлого — хуже, чем не показать ничего.
+            if (mIsInCombat.Value && !mIsFinished.Value)
+                return;
+
+            Debug.Log("[Combat] Награда восстановлена с сервера (ответ на добивающий ход не доехал).");
+            CaptureReward(snapshot.Reward, snapshot.LevelUp);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Debug.LogWarning($"[CombatPresenter] LastReward: {ex.Message}"); }
     }
 
     private void ResetCombatState()
