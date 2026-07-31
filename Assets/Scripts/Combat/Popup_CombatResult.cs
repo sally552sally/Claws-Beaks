@@ -1,4 +1,5 @@
-﻿using System.Text;
+using System.Collections.Generic;
+using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -6,75 +7,117 @@ using Zenject;
 
 /// <summary>
 /// Попап результата боя — Popup_CombatResult.
-/// Показывается поверх Panel_Combat когда бой завершён.
 ///
 /// Содержит:
 ///   — «Победа!» / «Поражение...» / «Бой прерван»
 ///   — Награду за бой: золото, опыт, выпавшие вещи, следы «Запаса сил», баннер левелапа
-///   — Кнопка OK → сбрасывает состояние боя (CombatPresenter.ExitCombatAsync).
-///     Дальше решает LocationPresenter (TD-C32, подписка на CombatEnded):
-///     при победе и прерывании остаёмся в охоте, при поражении — закрывает охоту
-///     и обновляет локацию (там же, если нужно, всплывёт диалог воскрешения).
+///   — Сворачиваемую таблицу участников: кто был в замесе, сколько нанёс урона, кто выжил
+///   — Кнопку OK.
 ///
-/// Скрытием попапа управляет View_Combat по IsFinished — на собственную кнопку OK
-/// полагаться нельзя: бой может быть сброшен и мимо неё.
+/// Открывается ДВУМЯ путями: концом живого боя (View_Combat) и тапом по «[Результат боя]»
+/// в системной строке чата. Раньше это было невозможно: попап читал состояние прямо из
+/// CombatPresenter, а OK звал ExitCombatAsync — то есть окно умело показывать только
+/// текущий бой и обязано было его завершать. Теперь всё это знает BattleReportPresenter,
+/// а попап стал обычным View поверх его реактивных полей и сам ничего не решает.
+///
+/// ИЕРАРХИЯ: объект живёт на уровне SafeArea, НЕ внутри Panel_Combat. Внутри он открыться
+/// из чата физически не может — Panel_Combat выключена, когда боя нет, а SetActive(true)
+/// на ребёнке выключенного родителя ничего не делает. Перенос делает Editor/SystemChatSetup.
 ///
 /// TD-C33: текстовый вывод награды — временный. Нормальная панель (иконки предметов, цвета
-/// редкости, анимация опыта) ждёт макета от штаба; здесь пока просто читаемый список, чтобы
-/// данные были видны глазами, а не только в логе.
+/// редкости, анимация опыта) ждёт макета от штаба.
 ///
-/// GameObject: Popup_CombatResult (вложен в Panel_Combat или выше в иерархии)
+/// GameObject: Popup_CombatResult (прямой потомок SafeArea, последний в порядке — рисуется поверх)
 /// </summary>
 public sealed class Popup_CombatResult : DisposableBehaviour
 {
+    [Header("Результат и награда")]
     [SerializeField] private TMP_Text mLabelResult;
     [SerializeField] private TMP_Text mLabelDrop;
-    [SerializeField] private Button   mButtonOk;
+    [SerializeField] private Button mButtonOk;
 
-    private CombatPresenter mPresenter;
+    [Header("Участники боя")]
+    [SerializeField] private Button mButtonParticipants;      // заголовок-переключатель
+    [SerializeField] private TMP_Text mLabelParticipantsHeader; // «Участники (4)» / «Загрузка…»
+    [SerializeField] private GameObject mParticipantsBody;      // контейнер, который сворачивается
+    [SerializeField] private Transform mParticipantsContent;    // родитель строк
+    [SerializeField] private Item_BattleParticipant mParticipantItemPrefab;
 
-    /// <summary>
-    /// Исход текущего показа. Нужен, потому что награда может доехать ПОЗЖЕ открытия попапа:
-    /// если ответ на добивающий ход потерялся, презентер дочитывает её отдельным запросом,
-    /// и текст надо перерисовать уже на открытом окне.
-    /// </summary>
-    private CombatOutcome mCurrentOutcome = CombatOutcome.None;
+    private BattleReportPresenter mPresenter;
+    private IViewPool<Item_BattleParticipant> mParticipantPool;
 
     [Inject]
-    public void Construct(CombatPresenter presenter)
+    public void Construct(BattleReportPresenter presenter)
     {
         mPresenter = presenter;
-
-        // callOnSubscribe: false — на старте награды нет, а Show() и так рисует текст сам.
-        mPresenter.LastReward
-            .SubscribeOnValueChanged(_ => RenderReward(), callOnSubscribe: false)
-            .DisposeWhenLifeEnded(this);
-
-        mPresenter.LastLevelUp
-            .SubscribeOnValueChanged(_ => RenderReward(), callOnSubscribe: false)
-            .DisposeWhenLifeEnded(this);
     }
 
     protected override void SafeAwake()
     {
         base.SafeAwake();
 
-        mButtonOk.onClick.AddListener(OnOkClicked);
-        gameObject.SetActive(false);
+        if (mParticipantItemPrefab != null && mParticipantsContent != null)
+            mParticipantPool = new ViewPool<Item_BattleParticipant>(mParticipantItemPrefab, mParticipantsContent);
+
+        BindButtons();
+        BindReactive();
+
+        gameObject.SetActive(mPresenter.IsOpen.Value);
     }
 
-    protected override void OnDestroy()
-    {
-        mButtonOk.onClick.RemoveListener(OnOkClicked);
+    // ─── Привязки ─────────────────────────────────────────────────────────────
 
-        base.OnDestroy();
+    private void BindButtons()
+    {
+        if (mButtonOk != null)
+            mButtonOk.SubscribeOnClick(() => mPresenter.Close()).DisposeWhenLifeEnded(this);
+
+        if (mButtonParticipants != null)
+            mButtonParticipants.SubscribeOnClick(() => mPresenter.ToggleParticipants())
+                .DisposeWhenLifeEnded(this);
     }
 
-    /// <summary>Показать попап с результатом боя.</summary>
-    public void Show(CombatOutcome outcome)
+    private void BindReactive()
     {
-        mCurrentOutcome = outcome;
+        mPresenter.IsOpen
+            .SubscribeOnValueChanged(gameObject.SetActive)
+            .DisposeWhenLifeEnded(this);
 
+        mPresenter.Outcome
+            .SubscribeOnValueChanged(RenderOutcome)
+            .DisposeWhenLifeEnded(this);
+
+        // Награда может доехать ПОЗЖЕ открытия окна (живой бой — дочитывание снимка,
+        // исторический — запрос last-reward), поэтому именно подписка, а не разовая отрисовка.
+        mPresenter.Reward
+            .SubscribeOnValueChanged(_ => RenderReward())
+            .DisposeWhenLifeEnded(this);
+
+        mPresenter.LevelUp
+            .SubscribeOnValueChanged(_ => RenderReward())
+            .DisposeWhenLifeEnded(this);
+
+        mPresenter.Participants
+            .SubscribeOnValueChanged(RebuildParticipants)
+            .DisposeWhenLifeEnded(this);
+
+        mPresenter.IsParticipantsLoading
+            .SubscribeOnValueChanged(_ => RenderParticipantsHeader())
+            .DisposeWhenLifeEnded(this);
+
+        mPresenter.ParticipantsFailed
+            .SubscribeOnValueChanged(_ => RenderParticipantsHeader())
+            .DisposeWhenLifeEnded(this);
+
+        mPresenter.IsParticipantsExpanded
+            .SubscribeOnValueChanged(OnParticipantsExpandedChanged)
+            .DisposeWhenLifeEnded(this);
+    }
+
+    // ─── Отрисовка ────────────────────────────────────────────────────────────
+
+    private void RenderOutcome(CombatOutcome outcome)
+    {
         if (mLabelResult != null)
             mLabelResult.text = outcome switch
             {
@@ -83,38 +126,27 @@ public sealed class Popup_CombatResult : DisposableBehaviour
                 _ => "Поражение..."
             };
 
+        // Блок награды зависит от исхода (у прерванного боя её не бывает) — перерисовываем.
         RenderReward();
-        gameObject.SetActive(true);
     }
 
-    /// <summary>Скрыть попап (бой сброшен — в том числе мимо кнопки OK).</summary>
-    public void Hide()
-    {
-        gameObject.SetActive(false);
-    }
-
-    /// <summary>
-    /// Перерисовать блок награды по текущему состоянию презентера.
-    /// Зовётся и из Show(), и по приходу награды (она может доехать после открытия окна).
-    /// </summary>
     private void RenderReward()
     {
-        if (mLabelDrop == null)
-            return;
+        if (mLabelDrop == null) return;
 
         // У прерванного боя нет ни победителя, ни лута — обещать дроп нечестно.
-        if (mCurrentOutcome == CombatOutcome.Interrupted)
+        if (mPresenter.Outcome.Value == CombatOutcome.Interrupted)
         {
             mLabelDrop.text = "Бой длился слишком долго и был прерван. HP сохранены.";
             return;
         }
 
-        var reward = mPresenter.LastReward.Value;
+        var reward = mPresenter.Reward.Value;
         if (reward == null)
         {
             // Награды нет вовсе: поражение, либо победа, где моба добил союзник (в N×M награда
             // идёт тому, кто бил его лично). Обещать «см. инвентарь» в этом случае — врать.
-            mLabelDrop.text = mCurrentOutcome == CombatOutcome.Win
+            mLabelDrop.text = mPresenter.Outcome.Value == CombatOutcome.Win
                 ? "Награды нет."
                 : string.Empty;
             return;
@@ -126,7 +158,7 @@ public sealed class Popup_CombatResult : DisposableBehaviour
         if (reward.RestedBonusApplied)
             text.Append($"\n<color=#7FD8FF>Запас сил применён (осталось зарядов: {reward.RestedChargesLeft})</color>");
 
-        var levelUp = mPresenter.LastLevelUp.Value;
+        var levelUp = mPresenter.LevelUp.Value;
         if (levelUp != null)
             text.Append($"\n<color=#FFD700>Новый уровень: {levelUp.OldLevel} → {levelUp.NewLevel}</color>");
 
@@ -140,9 +172,51 @@ public sealed class Popup_CombatResult : DisposableBehaviour
         mLabelDrop.text = text.ToString();
     }
 
-    private void OnOkClicked()
+    private void RebuildParticipants(List<BattleReportLine> lines)
     {
-        gameObject.SetActive(false);
-        mPresenter.ExitCombatAsync().Forget();
+        RenderParticipantsHeader();
+
+        if (mParticipantPool == null) return;
+
+        mParticipantPool.ReturnAll();
+        if (lines == null) return;
+
+        foreach (var line in lines)
+            mParticipantPool.Get().Setup(line);
+    }
+
+    /// <summary>
+    /// Заголовок-переключатель. Три состояния, и их нельзя схлопывать: «грузим», «не смогли»
+    /// и «загрузили, вот столько» — разные вещи, а пустая таблица без пояснения читалась бы
+    /// как «в бою никого не было».
+    /// </summary>
+    private void RenderParticipantsHeader()
+    {
+        if (mLabelParticipantsHeader == null) return;
+
+        var expandMark = mPresenter.IsParticipantsExpanded.Value ? "▼" : "►";
+
+        if (mPresenter.ParticipantsFailed.Value)
+        {
+            mLabelParticipantsHeader.text = "Состав боя загрузить не удалось";
+            return;
+        }
+
+        if (mPresenter.IsParticipantsLoading.Value)
+        {
+            mLabelParticipantsHeader.text = "Участники: загрузка…";
+            return;
+        }
+
+        var count = mPresenter.Participants.Value?.Count ?? 0;
+        mLabelParticipantsHeader.text = $"{expandMark} Участники ({count})";
+    }
+
+    private void OnParticipantsExpandedChanged(bool expanded)
+    {
+        if (mParticipantsBody != null)
+            mParticipantsBody.SetActive(expanded);
+
+        RenderParticipantsHeader();
     }
 }

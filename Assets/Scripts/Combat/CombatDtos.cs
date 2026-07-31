@@ -15,6 +15,14 @@ public sealed class CombatParticipantView
     [JsonProperty("isAlive")]              public bool    IsAlive             { get; set; }
     [JsonProperty("isMob")]               public bool    IsMob               { get; set; }
     [JsonProperty("opponentParticipantId")] public long?  OpponentParticipantId { get; set; }
+
+    /// <summary>
+    /// Суммарный урон бойца за весь бой. Нужен таблице участников в окне результата
+    /// (см. BattleReportPresenter): смысл окна не в награде, а в «кто был и кто отработал».
+    /// Значение копилось на сервере с самого начала — наружу его стали отдавать вместе
+    /// с этой задачей.
+    /// </summary>
+    [JsonProperty("damageDealt")]           public long   DamageDealt { get; set; }
 }
 
 /// <summary>Один удар в бою (используется в трейсе и комбо).</summary>

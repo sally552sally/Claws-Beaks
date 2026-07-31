@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -95,6 +95,14 @@ public sealed class CombatPresenter : DisposableObject, IInitializable
 
     /// <summary>Повышение уровня за последний бой. null — уровень не менялся.</summary>
     public ReadonlyReactive<CombatLevelUpView> LastLevelUp => mLastLevelUp.Readonly;
+
+    /// <summary>
+    /// Id текущей (или только что завершившейся) боевой сессии. 0 — боя нет.
+    /// Нужен BattleReportPresenter'у, чтобы дотянуть состав боя по завершении: реактивным
+    /// это делать незачем — читается ровно в момент показа окна, подписчиков нет.
+    /// Обнуляется в ResetCombatState вместе с остальным боевым состоянием.
+    /// </summary>
+    public long SessionId => mSessionId;
 
     // ─── Публичные события ────────────────────────────────────────────────────
 

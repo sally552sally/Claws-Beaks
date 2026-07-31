@@ -8,7 +8,7 @@ using Zenject;
 /// <summary>
 /// Экран чата — Panel_Chat (Game-сцена, на весь экран поверх Location/Hunting, открывается
 /// кнопкой рядом с «Инвентарь» в обоих). Единый слитный лог (не вкладки) — фильтры
-/// Локация/Торговый чекбоксами, Личка видна всегда без чекбокса. Отдельно, под логом —
+/// Локация/Торговый чекбоксами, Личка и Система видны всегда без чекбокса. Отдельно, под логом —
 /// переключатель КУДА пишем (Локация/Торговый/Личка), не путать с фильтрами приёма.
 ///
 /// Приём сообщений НЕ зависит от этого экрана — ChatPresenter копит буфер всегда,
@@ -168,7 +168,12 @@ public sealed class View_Chat : DisposableBehaviour
         foreach (var line in lines)
         {
             var item = mMessagePool.Get();
-            item.Setup(line, TagFor(line.ChannelType), mConfig.ColorFor(line.ChannelType), OnMessageClicked);
+            item.Setup(
+                line,
+                TagFor(line.ChannelType),
+                mConfig.ColorFor(line.ChannelType),
+                OnMessageClicked,
+                OnMessageActionClicked);
         }
 
         ScrollToBottom();
@@ -178,6 +183,7 @@ public sealed class View_Chat : DisposableBehaviour
     {
         ChatChannelTypes.VIEW_TRADE => "Торг",
         ChatChannelTypes.VIEW_PRIVATE => "Личка",
+        ChatChannelTypes.VIEW_SYSTEM => "Система",
         _ => null // Локация — без тега, это канал "по умолчанию"
     };
 
@@ -194,7 +200,15 @@ public sealed class View_Chat : DisposableBehaviour
     private void OnFilterLocationClicked() => mPresenter.SetShowLocation(!mPresenter.ShowLocation.Value);
     private void OnFilterTradeClicked() => mPresenter.SetShowTrade(!mPresenter.ShowTrade.Value);
 
+    /// <summary>Тап по обычной строке — «ответить» (личка отправителю).</summary>
     private void OnMessageClicked(ChatDisplayLine line) => mPresenter.SetPrivateTargetFromLine(line);
+
+    /// <summary>
+    /// Тап по кликабельному фрагменту строки. Что именно делать — решает Presenter
+    /// (см. ChatPresenter.InvokeLineAction): View не знает ни про бой, ни про будущие
+    /// виды действий, его дело — сообщить о попадании.
+    /// </summary>
+    private void OnMessageActionClicked(ChatDisplayLine line) => mPresenter.InvokeLineAction(line);
 
     private void OnSendChannelChanged(ChatSendChannel channel)
     {

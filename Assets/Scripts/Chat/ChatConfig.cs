@@ -14,12 +14,22 @@ public class ChatConfig : ScriptableObject
     private int mMaxMessageLength = 250;
 
     [Header("Буфер (клиент, НЕ история с сервера — каналы live-only по дизайну)")]
-    [SerializeField, Tooltip("Сколько минут держим сообщение в буфере до авточистки")]
+    [SerializeField, Tooltip("Сколько минут держим сообщение локации и торгового канала до авточистки")]
     private float mBufferWindowMinutes = 10f;
 
     [SerializeField, Tooltip("Жёсткий потолок сообщений в буфере — защита от разрастания, " +
-        "если чат зальют спамом за окно. Не альтернатива времени, а страховка сверху.")]
+        "если чат зальют спамом за окно. Не альтернатива времени, а страховка сверху. " +
+        "Единственное, что ограничивает личку: по времени она не истекает вообще.")]
     private int mBufferMaxMessages = 300;
+
+    [SerializeField, Tooltip("Сколько минут живёт системное сообщение. Дольше болтовни: " +
+        "результат боя и анонс техработ нужны и через полчаса после прихода.")]
+    private float mSystemLifetimeMinutes = 60f;
+
+    [SerializeField, Tooltip("Сколько системок держим одновременно. Отдельный потолок поверх " +
+        "общего: за час их накапливается по одной на бой, и без своего лимита они вытеснили бы " +
+        "живую переписку из общего буфера.")]
+    private int mSystemMaxMessages = 20;
 
     [SerializeField, Tooltip("Как часто чистим протухшие по времени сообщения, если новых не приходит")]
     private float mCleanupIntervalSeconds = 30f;
@@ -39,16 +49,47 @@ public class ChatConfig : ScriptableObject
     public int MaxMessageLength => mMaxMessageLength;
     public float BufferWindowMinutes => mBufferWindowMinutes;
     public int BufferMaxMessages => mBufferMaxMessages;
+    public float SystemLifetimeMinutes => mSystemLifetimeMinutes;
+    public int SystemMaxMessages => mSystemMaxMessages;
     public float CleanupIntervalSeconds => mCleanupIntervalSeconds;
     public bool PreserveLocationBufferOnLocationChange => mPreserveLocationBufferOnLocationChange;
 
     /// <summary>Акцентный цвет тега канала. Ждёт lowercase (ChatMessageView.ChannelType) —
-    /// см. ChatChannelTypes.VIEW_*. Неизвестное/системное — mSystemColor (заготовка на беклог).</summary>
+    /// см. ChatChannelTypes.VIEW_*.</summary>
     public Color ColorFor(string viewChannelType) => viewChannelType switch
     {
         ChatChannelTypes.VIEW_LOCATION => mLocationColor,
         ChatChannelTypes.VIEW_TRADE => mTradeColor,
         ChatChannelTypes.VIEW_PRIVATE => mPrivateColor,
+        ChatChannelTypes.VIEW_SYSTEM => mSystemColor,
         _ => mSystemColor
+    };
+
+    /// <summary>
+    /// Сколько минут сообщение канала живёт в буфере. null — НЕ истекает по времени вовсе.
+    ///
+    /// Раньше срок был один на все каналы, и личка молча исчезала через десять минут: отошёл
+    /// на четверть часа — переписки нет, хотя собеседник её видит у себя в окне. Болтовня в
+    /// локации и торге устаревает сама и режется по времени; личка ограничена только общим
+    /// потолком буфера; системки живут дольше остальных (см. MaxMessagesFor — у них ещё и
+    /// собственный лимит по количеству).
+    ///
+    /// Ждёт lowercase — см. ChatChannelTypes.VIEW_*, по образцу ColorFor.
+    /// </summary>
+    public float? LifetimeFor(string viewChannelType) => viewChannelType switch
+    {
+        ChatChannelTypes.VIEW_PRIVATE => null,
+        ChatChannelTypes.VIEW_SYSTEM => mSystemLifetimeMinutes,
+        _ => mBufferWindowMinutes
+    };
+
+    /// <summary>
+    /// Собственный потолок количества для канала. null — отдельного лимита нет, работает
+    /// только общий BufferMaxMessages.
+    /// </summary>
+    public int? MaxMessagesFor(string viewChannelType) => viewChannelType switch
+    {
+        ChatChannelTypes.VIEW_SYSTEM => mSystemMaxMessages,
+        _ => null
     };
 }
