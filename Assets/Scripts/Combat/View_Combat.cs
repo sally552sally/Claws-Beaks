@@ -82,9 +82,10 @@ public sealed class View_Combat : DisposableBehaviour
     [SerializeField] private Button mButtonLog;
 
     // ─── Результат боя ────────────────────────────────────────────────────────
-
-    [Header("Результат")]
-    [SerializeField] private Popup_CombatResult mResultPopup;
+    //
+    // Ссылки на попап здесь больше нет. Он живёт на уровне SafeArea, а не внутри Panel_Combat
+    // (иначе его нельзя открыть из чата: родитель выключен, когда боя нет), и управляется
+    // BattleReportPresenter'ом. View_Combat только сообщает ему, что бой кончился.
 
     // ─── Прочее ───────────────────────────────────────────────────────────────
 
@@ -94,11 +95,13 @@ public sealed class View_Combat : DisposableBehaviour
     // ─── Инъекции ─────────────────────────────────────────────────────────────
 
     private CombatPresenter mPresenter;
+    private BattleReportPresenter mBattleReport;
 
     [Inject]
-    public void Construct(CombatPresenter presenter)
+    public void Construct(CombatPresenter presenter, BattleReportPresenter battleReport)
     {
         mPresenter = presenter;
+        mBattleReport = battleReport;
     }
 
     // ─── DisposableBehaviour ──────────────────────────────────────────────────
@@ -262,15 +265,16 @@ public sealed class View_Combat : DisposableBehaviour
 
     private void OnFinished(bool isFinished)
     {
-        if (mResultPopup == null) return;
-
         if (isFinished)
-            mResultPopup.Show(mPresenter.Outcome.Value);
-        else
-            // Раньше здесь была только ветка показа: попап скрывался исключительно из
-            // собственной кнопки OK. Если бой сбрасывался мимо неё (новый бой поднят
-            // авто-возобновлением или PvP-нападением, ForceExitCombat из диалога
-            // воскрешения), попап оставался висеть поверх уже идущего нового боя.
-            mResultPopup.Hide();
+        {
+            mBattleReport.ShowLive(mPresenter.SessionId, mPresenter.Outcome.Value);
+            return;
+        }
+
+        // Бой сброшен мимо кнопки OK (новый бой поднят авто-возобновлением или PvP-нападением,
+        // ForceExitCombat из диалога воскрешения) — окно надо убрать, иначе оно повиснет поверх
+        // уже идущего нового боя. Silently: выходить из боя не нужно, из него уже вышли.
+        // Историческое окно, открытое из чата, этот вызов не трогает — см. CloseLiveSilently.
+        mBattleReport.CloseLiveSilently();
     }
 }

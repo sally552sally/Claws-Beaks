@@ -78,8 +78,14 @@ public sealed class ChatHistoryService : DisposableObject, IChatHistoryService, 
     {
         mMessages.Sort((a, b) => a.SentAt.CompareTo(b.SentAt));
 
-        var cutoffUtc = DateTime.UtcNow.AddMinutes(-mConfig.BufferWindowMinutes);
-        mMessages.RemoveAll(m => m.SentAt < cutoffUtc);
+        // Срок жизни — СВОЙ у каждого канала (ChatConfig.LifetimeFor). Раньше здесь был один
+        // cutoff на всех, и личка исчезала вместе с болтовнёй локации.
+        var nowUtc = DateTime.UtcNow;
+        mMessages.RemoveAll(m => IsExpired(m, nowUtc));
+
+        // Собственный потолок канала — ДО общего: системки не должны вытеснять переписку из
+        // общего буфера только потому, что живут дольше.
+        EvictChannelOverflow(ChatChannelTypes.VIEW_SYSTEM);
 
         if (mMessages.Count > mConfig.BufferMaxMessages)
             mMessages.RemoveRange(0, mMessages.Count - mConfig.BufferMaxMessages); // старейшие — после сортировки выше они первые
@@ -90,6 +96,48 @@ public sealed class ChatHistoryService : DisposableObject, IChatHistoryService, 
 
         if (IsDisposed) return;
         mAllMessages.Value = new List<ChatMessageView>(mMessages); // копия — не отдаём внутренний список на мутацию
+    }
+
+    /// <summary>Протухло ли сообщение по времени. Канал без срока (личка) не протухает никогда.</summary>
+    private bool IsExpired(ChatMessageView message, DateTime nowUtc)
+    {
+        if (mConfig.LifetimeFor(message.ChannelType) is not { } lifetimeMinutes) return false;
+        return message.SentAt < nowUtc.AddMinutes(-lifetimeMinutes);
+    }
+
+    /// <summary>
+    /// Режет самые старые сообщения ОДНОГО канала до его собственного лимита.
+    /// Список уже отсортирован по времени, поэтому идём с начала и удаляем первые попавшиеся
+    /// сообщения нужного канала — это и есть старейшие.
+    /// </summary>
+    private void EvictChannelOverflow(string viewChannelType)
+    {
+        if (mConfig.MaxMessagesFor(viewChannelType) is not { } limit) return;
+
+        var excess = CountOf(viewChannelType) - limit;
+        if (excess <= 0) return;
+
+        for (var i = 0; i < mMessages.Count && excess > 0;)
+        {
+            if (mMessages[i].ChannelType == viewChannelType)
+            {
+                mMessages.RemoveAt(i);
+                excess--;
+            }
+            else
+            {
+                i++;
+            }
+        }
+    }
+
+    private int CountOf(string viewChannelType)
+    {
+        var count = 0;
+        foreach (var m in mMessages)
+            if (m.ChannelType == viewChannelType)
+                count++;
+        return count;
     }
 
     protected override void OnDispose()

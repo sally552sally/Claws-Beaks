@@ -113,6 +113,12 @@ public class GameInstaller : MonoInstaller
             .FromInstance(mCombatView)
             .AsSingle();
 
+        // Окно результата боя: своё состояние, свой источник данных, два входа (конец живого
+        // боя и клик по системной строке в чате). NonLazy не нужен — оживает по первому показу,
+        // но ChatPresenter резолвит его в конструкторе, а тот NonLazy.
+        Container.BindInterfacesAndSelfTo<BattleReportPresenter>()
+            .AsSingle();
+
         Container.Bind<Popup_CombatResult>()
             .FromInstance(mCombatResultPopup)
             .AsSingle();

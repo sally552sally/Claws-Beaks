@@ -170,7 +170,9 @@ public static class CombatSetup
             so.FindProperty("mSlot3")           .objectReferenceValue = csvw3;
             so.FindProperty("mLogPopup")        .objectReferenceValue = logPopup;
             so.FindProperty("mButtonLog")       .objectReferenceValue = btnLog;
-            so.FindProperty("mResultPopup")     .objectReferenceValue = popupComp;
+            // mResultPopup у View_Combat больше нет: окно результата переехало на уровень
+            // SafeArea и управляется BattleReportPresenter'ом (иначе его не открыть из чата —
+            // Panel_Combat выключена, когда боя нет). Перенос делает Editor/SystemChatSetup.
             so.FindProperty("mSpinner")         .objectReferenceValue = spinner;
             so.ApplyModifiedProperties();
             Debug.Log("[CombatSetup] View_Combat: все поля назначены.");
@@ -220,7 +222,9 @@ public static class CombatSetup
                   "Осталось:\n" +
                   "  1. Сохрани сцену (Ctrl+S)\n" +
                   "  2. Удали Assets/Editor/CombatSetup.cs\n" +
-                  "  3. Запусти игру и нажми «Атаковать»");
+                  "  3. Запусти игру и нажми «Атаковать»\n" +
+                  "  4. ВАЖНО: после этого скрипта прогони MMORPG → Setup → System Chat — он\n" +
+                  "     вынесет Popup_CombatResult из Panel_Combat на уровень SafeArea.");
     }
 
     // ════════════════════════════════════════════════════════════════════════
