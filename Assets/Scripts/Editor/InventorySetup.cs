@@ -59,7 +59,10 @@ public static class InventorySetup
 
         // ── Panel_Inventory ──────────────────────────────────────────────────
         var panel = MakeStretchPanel("Panel_Inventory", safeArea, PanelBg);
-        panel.SetActive(false);
+        // Стартуем активным: Awake не вызывается на выключенном GameObject, и тогда
+        // View_Inventory.SafeAwake не отработает — не построятся вкладки и, главное,
+        // не встанет подписка на IsOpen, из-за чего панель уже не сможет себя показать.
+        // SafeAwake сам скроет себя в конце по IsOpen.Value = false. Так же в ChatSetup.
         var view = panel.AddComponent<View_Inventory>();
         // Жёсткий клип по границам панели: что бы ни случилось с раскладкой внутри,
         // за пределы Panel_Inventory ничего не нарисуется (фон локации не просвечивает).
@@ -126,21 +129,8 @@ public static class InventorySetup
         equipVlg.childControlHeight = true;
 
         MakeLabel("Label_EquipHeader", panelEquip.transform, "Надето", 20);
-        var equipGrid = MakeGrid("Grid_EquipSlots", panelEquip.transform, cell: new Vector2(150, 70), cols: 3);
+        var equipSlots = InventoryDollBuilder.Build(panelEquip.transform);
 
-        var equipSlots = new List<EquipSlotView>
-        {
-            MakeEquipSlot(equipGrid.transform, "weapon_main", "Оружие",  false),
-            MakeEquipSlot(equipGrid.transform, "weapon_off",  "Оружие 2", false),
-            MakeEquipSlot(equipGrid.transform, "head",        "Голова",  false),
-            MakeEquipSlot(equipGrid.transform, "body",        "Тело",    false),
-            MakeEquipSlot(equipGrid.transform, "hands",       "Руки",    false),
-            MakeEquipSlot(equipGrid.transform, "legs",        "Ноги",    false),
-            MakeEquipSlot(equipGrid.transform, "belt",        "Пояс",    false),
-            MakeEquipSlot(equipGrid.transform, "ring1",       "Кольцо",  true),
-            MakeEquipSlot(equipGrid.transform, "ring2",       "Кольцо",  true),
-            MakeEquipSlot(equipGrid.transform, "amulet",      "Амулет",  true),
-        };
 
         MakeLabel("Label_BackpackHeader", panelEquip.transform, "Рюкзак", 20);
         var backpackScroll = MakeScrollList("Scroll_Backpack", panelEquip.transform, out var backpackContent);
