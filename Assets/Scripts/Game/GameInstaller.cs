@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using Zenject;
 
 /// <summary>
@@ -19,6 +19,9 @@ public class GameInstaller : MonoInstaller
     [SerializeField] private View_Inventory   mInventoryView;
     [SerializeField] private Popup_ItemDetail mItemDetailPopup;
 
+    [Header("Кузнец")]
+    [SerializeField] private View_Blacksmith mBlacksmithView;
+
     [Header("Чат")]
     [SerializeField] private View_Chat mChatView;
 
@@ -31,6 +34,7 @@ public class GameInstaller : MonoInstaller
         InstallLocation();
         InstallCombat();
         InstallInventory();
+        InstallBlacksmith();
         InstallChat();
         InstallNotifications();
     }
@@ -122,6 +126,30 @@ public class GameInstaller : MonoInstaller
         Container.Bind<Popup_CombatResult>()
             .FromInstance(mCombatResultPopup)
             .AsSingle();
+    }
+
+    // ─── Кузнец ─────────────────────────────────────────────────────────────────
+
+    private void InstallBlacksmith()
+    {
+        Container.Bind<IBlacksmithService>()
+            .To<BlacksmithService>()
+            .AsSingle();
+
+        // NonLazy: Initialize() подписывается на CombatPresenter.IsInCombat — экран кузнеца
+        // должен закрыться, если стартовал бой (ремонт в бою сервер запрещает).
+        Container.BindInterfacesAndSelfTo<BlacksmithPresenter>()
+            .AsSingle()
+            .NonLazy();
+
+        // Панель может отсутствовать в сцене, пока не прогнан Editor/BlacksmithSetup.cs —
+        // в этом случае бинд пропускаем, чтобы сцена не падала на старте.
+        if (mBlacksmithView != null)
+        {
+            Container.Bind<View_Blacksmith>()
+                .FromInstance(mBlacksmithView)
+                .AsSingle();
+        }
     }
 
     // ─── Инвентарь ──────────────────────────────────────────────────────────────

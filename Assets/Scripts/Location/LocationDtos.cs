@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 
@@ -19,6 +19,12 @@ public sealed class CurrentLocationResponse
 
     /// <summary>PvP разрешён. Только UX — сервер всё равно проверяет при engage.</summary>
     [JsonProperty("pvpEnabled")] public bool PvpEnabled { get; set; }
+
+    /// <summary>
+    /// В локации есть кузнец — по этому флагу показывается кнопка «Кузнец». Только UX: сервер
+    /// всё равно проверяет наличие кузнеца при ремонте и при расчёте цены.
+    /// </summary>
+    [JsonProperty("blacksmithEnabled")] public bool BlacksmithEnabled { get; set; }
 
     /// <summary>
     /// Можно ли сейчас перейти в другую локацию (сервер проверил таймер + бой + ExitEnabled).

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
@@ -45,6 +45,9 @@ public class LocationPresenter : DisposableObject, IInitializable
     /// заблокирован модальным диалогом воскрешения (см. ShowResurrectDialogIfNeeded).</summary>
     private readonly Reactive<bool> mIsAwaitingResurrection = new(false);
 
+    /// <summary>В текущей локации есть кузнец — показывать кнопку «Кузнец».</summary>
+    private readonly Reactive<bool> mBlacksmithHere = new(false);
+
     public ReadonlyReactive<string> LocationName => mLocationName.Readonly;
     public ReadonlyReactive<int> LocationLevel => mLocationLevel.Readonly;
     public ReadonlyReactive<bool> CanMove => mCanMove.Readonly;
@@ -56,6 +59,7 @@ public class LocationPresenter : DisposableObject, IInitializable
     public ReadonlyReactive<List<PlayerInLocationDto>> Players => mPlayers.Readonly;
     public ReadonlyReactive<bool> IsHuntingOpen => mIsHuntingOpen.Readonly;
     public ReadonlyReactive<bool> IsAwaitingResurrection => mIsAwaitingResurrection.Readonly;
+    public ReadonlyReactive<bool> BlacksmithHere => mBlacksmithHere.Readonly;
 
     /// <summary>Локация, в которой мы сейчас, по данным последнего REST-ответа. null пока
     /// не пришёл первый ответ. Публична для ChatPresenter — чистит буфер чата локации при смене.</summary>
@@ -235,6 +239,7 @@ public class LocationPresenter : DisposableObject, IInitializable
         mMobs.Value = response.Mobs ?? new List<MobSpawnDto>();
         mPlayers.Value = response.Players ?? new List<PlayerInLocationDto>();
         mIsAwaitingResurrection.Value = response.IsAwaitingResurrection;
+        mBlacksmithHere.Value = response.BlacksmithEnabled;
 
         if (mCurrentLocationId.Value != response.LocationId)
         {

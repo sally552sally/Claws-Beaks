@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using TMPro;
 using UnityEngine;
@@ -43,6 +43,13 @@ public class View_Location : DisposableBehaviour
     [SerializeField] private Button mInventoryButton;
     /// <summary>Кнопка «Чат» — открывает Panel_Chat поверх локации.</summary>
     [SerializeField] private Button mChatButton;
+
+    /// <summary>
+    /// Кнопка «Кузнец» — открывает Panel_Blacksmith (ремонт). Видна ТОЛЬКО в локациях, где
+    /// кузнец есть: сервер отдаёт флаг в blacksmithEnabled. Прятать, а не гасить — так само
+    /// расположение кнопки объясняет игроку, что чинят в городе.
+    /// </summary>
+    [SerializeField] private Button mBlacksmithButton;
     /// <summary>Кнопка «Выйти» — необязательна, добавляешь сам в редакторе и просто
     /// перетаскиваешь сюда. Код клика уже готов (BindButtons ниже).</summary>
     [SerializeField] private Button mLogoutButton;
@@ -64,17 +71,19 @@ public class View_Location : DisposableBehaviour
     private LocationPresenter mPresenter;
     private InventoryPresenter mInventoryPresenter;
     private ChatPresenter mChatPresenter;
+    private BlacksmithPresenter mBlacksmithPresenter;
     private readonly List<NeighborButtonView> mNeighborButtons = new();
 
     // ─── Zenject Inject ───────────────────────────────────────────────────────
 
     [Inject]
     public void Construct(LocationPresenter presenter, InventoryPresenter inventoryPresenter,
-        ChatPresenter chatPresenter)
+        ChatPresenter chatPresenter, BlacksmithPresenter blacksmithPresenter)
     {
         mPresenter = presenter;
         mInventoryPresenter = inventoryPresenter;
         mChatPresenter = chatPresenter;
+        mBlacksmithPresenter = blacksmithPresenter;
     }
 
     // ─── DisposableBehaviour ──────────────────────────────────────────────────
@@ -138,6 +147,19 @@ public class View_Location : DisposableBehaviour
         if (mChatButton != null)
             mChatButton.SubscribeOnClick(() => mChatPresenter.Open())
                 .DisposeWhenLifeEnded(this);
+
+        if (mBlacksmithButton != null)
+        {
+            mBlacksmithButton.SubscribeOnClick(() => mBlacksmithPresenter.Open())
+                .DisposeWhenLifeEnded(this);
+
+            // Видимость — по флагу локации. callOnSubscribe: true, чтобы кнопка приняла верное
+            // состояние сразу, не дожидаясь следующего обновления локации.
+            mPresenter.BlacksmithHere
+                .SubscribeOnValueChanged(here => mBlacksmithButton.gameObject.SetActive(here),
+                    callOnSubscribe: true)
+                .DisposeWhenLifeEnded(this);
+        }
 
         if (mLogoutButton != null)
             mLogoutButton.SubscribeOnClick(() => mPresenter.LogoutAsync(destroyCancellationToken).Forget())
