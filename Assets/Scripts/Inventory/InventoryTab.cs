@@ -2,23 +2,30 @@
 /// Вкладки инвентаря. Расширяемый список (§6.8 — «будут добавляться другие категории»).
 /// Добавить новую категорию = добавить значение сюда и в InventoryPresenter.Tabs;
 /// View строит кнопки вкладок по этому списку, разметку править не нужно.
+///
+/// Состав приведён к mockup_inventory_v5 и NAVIGATION — закрывает TD-C46.
+///
+/// ВАЖНО, чем это отличается от прежней раскладки:
+///   1. Рюкзак («Сумка») вынесен из вкладки экипировки в собственную. Раньше кукла и
+///      скролл рюкзака делили высоту одной VerticalLayoutGroup: кукла заявляла большой
+///      preferred-размер, ScrollRect — нулевой, и рюкзак схлопывался в полоску.
+///   2. Вкладки «Сундук» здесь больше нет. Личный сундук в городе — отдельный контейнер
+///      на сервере (container='chest') и отдельная точка в локации, а не раздел инвентаря.
+///      Panel_Chest в сцене остаётся, просто ни одна вкладка его не показывает.
 /// </summary>
 public enum InventoryTab
 {
-    /// <summary>Экипировка (6+1 слотов) + рюкзак.</summary>
-    Equipment,
+    /// <summary>Кукла на 11 ячеек (8 боевых + Пояс + 2 кольца-заглушки) и статы.</summary>
+    Hero,
 
-    /// <summary>Личный сундук (доступен не везде — гейт по локации).</summary>
-    Chest,
+    /// <summary>Носимые вещи — сетка 4 колонки. На сервере это container='backpack'.</summary>
+    Bag,
 
-    /// <summary>Расходка («Эффекты»): хилки/усилки/яды с TTL. Только просмотр.</summary>
-    Effects,
-
-    /// <summary>Ресурсы для профессий (заглушка — контента пока нет).</summary>
-    Resources,
-
-    /// <summary>Квестовые предметы (заглушка — контента пока нет).</summary>
-    Quests
+    /// <summary>
+    /// Пояс: быстрые слоты расходки. Пока показывает простой список стаков с TTL —
+    /// сетка 5×2 с замками на закрытых слотах остаётся за TD-C47.
+    /// </summary>
+    Belt
 }
 
 /// <summary>Локализация и метаданные вкладок инвентаря (заголовки, заглушки).</summary>
@@ -27,23 +34,19 @@ public static class InventoryTabInfo
     /// <summary>Заголовок вкладки для кнопки.</summary>
     public static string Title(InventoryTab tab) => tab switch
     {
-        InventoryTab.Equipment => "Снаряжение",
-        InventoryTab.Chest     => "Сундук",
-        InventoryTab.Effects   => "Эффекты",
-        InventoryTab.Resources => "Ресурсы",
-        InventoryTab.Quests    => "Квесты",
+        InventoryTab.Hero => "Герой",
+        InventoryTab.Bag => "Сумка",
+        InventoryTab.Belt => "Пояс",
         _ => tab.ToString()
     };
 
     /// <summary>Текст-заглушка для пустых пока категорий (null — у вкладки реальный контент).</summary>
-    public static string PlaceholderText(InventoryTab tab) => tab switch
-    {
-        InventoryTab.Resources => "Ресурсы появятся с профессиями.",
-        InventoryTab.Quests    => "Квестовые предметы появятся позже.",
-        _ => null
-    };
+    public static string PlaceholderText(InventoryTab tab) => null;
 
-    /// <summary>Является ли вкладка заглушкой (контента нет).</summary>
-    public static bool IsPlaceholder(InventoryTab tab)
-        => tab is InventoryTab.Resources or InventoryTab.Quests;
+    /// <summary>
+    /// Является ли вкладка заглушкой (контента нет).
+    /// Сейчас заглушек нет — у всех трёх вкладок реальное содержимое. Метод и панель
+    /// Panel_Placeholder сохранены: «Питомцы» и «Коллекции» из макета добавятся сюда же.
+    /// </summary>
+    public static bool IsPlaceholder(InventoryTab tab) => false;
 }
