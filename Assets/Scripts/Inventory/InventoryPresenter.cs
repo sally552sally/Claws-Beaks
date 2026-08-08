@@ -11,9 +11,16 @@ using Zenject;
 /// Отвечает за:
 ///   — открытие/закрытие панели (IsOpen);
 ///   — активную вкладку (ActiveTab) из расширяемого списка категорий (см. InventoryTab);
-///   — данные: надетое, рюкзак, сундук, расходка (стаки);
+///   — данные: надетое, сумка, сундук, расходка (стаки);
 ///   — команды: надеть/снять/починить/выбросить/положить в сундук/достать;
 ///   — авто-закрытие, если стартовал бой (CombatPresenter.IsInCombat).
+///
+/// ВКЛАДКИ (по mockup_inventory_v5, TD-C46): Герой / Сумка / Пояс.
+/// Сундук вкладкой не является: это отдельный контейнер сервера (container='chest')
+/// и точка в городе. Состояние сундука (mChest, mChestAvailableHere) и команды
+/// Deposit/Withdraw сохранены рабочими — когда появится городской сундук, включать
+/// заново ничего не придётся. Данные сундука грузятся только по явному вызову
+/// LoadChest(), не по переключению вкладок.
 ///
 /// АРХИТЕКТУРА (UnityStyle):
 ///   — чистый C#, без using UnityEngine логики (Debug допустим как и в CombatPresenter);
@@ -35,7 +42,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
     private readonly Reactive<bool> mIsOpen = new(false);
     private readonly Reactive<bool> mIsLoading = new(false);
 
-    private readonly Reactive<InventoryTab> mActiveTab = new(InventoryTab.Equipment);
+    private readonly Reactive<InventoryTab> mActiveTab = new(InventoryTab.Hero);
 
     private readonly Reactive<List<InventoryItemDto>> mEquipped = new(new List<InventoryItemDto>());
     private readonly Reactive<List<InventoryItemDto>> mBackpack = new(new List<InventoryItemDto>());
@@ -64,11 +71,9 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
     /// <summary>Список вкладок в порядке показа. Расширяется добавлением значения сюда (и в enum).</summary>
     public IReadOnlyList<InventoryTab> Tabs { get; } = new[]
     {
-        InventoryTab.Equipment,
-        InventoryTab.Chest,
-        InventoryTab.Effects,
-        InventoryTab.Resources,
-        InventoryTab.Quests
+        InventoryTab.Hero,
+        InventoryTab.Bag,
+        InventoryTab.Belt
     };
 
     // ─── Внутреннее состояние ─────────────────────────────────────────────────
@@ -120,7 +125,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
         if (mIsOpen.Value) return;
 
         mIsOpen.Value = true;
-        mActiveTab.Value = InventoryTab.Equipment;
+        mActiveTab.Value = InventoryTab.Hero;
         RefreshAsync(mLifetimeCts.Token).Forget();
     }
 
@@ -131,21 +136,23 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
         mIsOpen.Value = false;
     }
 
-    /// <summary>Переключить вкладку. При открытии вкладки сундука/эффектов догружаем их данные.</summary>
+    /// <summary>
+    /// Переключить вкладку. Герой и Сумка работают на данных, уже полученных
+    /// GetInventoryAsync — догружать нечего. Пояс тянет стаки отдельным запросом.
+    /// </summary>
     public void SelectTab(InventoryTab tab)
     {
         mActiveTab.Value = tab;
 
-        switch (tab)
-        {
-            case InventoryTab.Chest:
-                LoadChestAsync(mLifetimeCts.Token).Forget();
-                break;
-            case InventoryTab.Effects:
-                LoadStacksAsync(mLifetimeCts.Token).Forget();
-                break;
-        }
+        if (tab == InventoryTab.Belt)
+            LoadStacksAsync(mLifetimeCts.Token).Forget();
     }
+
+    /// <summary>
+    /// Явно загрузить содержимое личного сундука (городская точка, не вкладка).
+    /// Вызывать из UI сундука, когда он появится.
+    /// </summary>
+    public void LoadChest() => LoadChestAsync(mLifetimeCts.Token).Forget();
 
     // ─── Детали предмета ──────────────────────────────────────────────────────
 
@@ -196,7 +203,13 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
 
     // ─── Внутренняя загрузка ──────────────────────────────────────────────────
 
-    /// <summary>Полное обновление: инвентарь (+ сундук/эффекты, если активна их вкладка).</summary>
+    /// <summary>
+    /// Полное обновление: инвентарь (надетое + сумка + вместимость), плюс стаки,
+    /// если открыт Пояс.
+    ///
+    /// Сундук здесь НЕ перечитывается: он больше не вкладка, и после Deposit/Withdraw
+    /// его содержимое обновит тот UI, который его открыл — через LoadChest().
+    /// </summary>
     private async UniTask RefreshAsync(CancellationToken ct)
     {
         mIsLoading.Value = true;
@@ -205,10 +218,7 @@ public sealed class InventoryPresenter : DisposableObject, IInitializable
             var inv = await mService.GetInventoryAsync(ct);
             ApplyInventory(inv);
 
-            // Догрузить активную вкладку, если это сундук/эффекты.
-            if (mActiveTab.Value == InventoryTab.Chest && mChestAvailableHere.Value)
-                await LoadChestAsync(ct);
-            else if (mActiveTab.Value == InventoryTab.Effects)
+            if (mActiveTab.Value == InventoryTab.Belt)
                 await LoadStacksAsync(ct);
         }
         catch (OperationCanceledException) { }

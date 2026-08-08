@@ -7,11 +7,15 @@ using Zenject;
 /// <summary>
 /// Экран инвентаря — Panel_Inventory (Game-сцена, поверх Location/Hunting, под Combat по Sort Order).
 ///
-/// Вкладки (расширяемый список из InventoryPresenter.Tabs):
-///   Снаряжение — кукла на 11 ячеек (8 боевых + Пояс + 2 кольца-заглушки) и рюкзак;
-///   Сундук     — личный сундук (активна только если доступен здесь);
-///   Эффекты    — вся расходка с TTL (только просмотр);
-///   Ресурсы / Квесты — заглушки.
+/// Вкладки (расширяемый список из InventoryPresenter.Tabs), по mockup_inventory_v5:
+///   Герой — кукла на 11 ячеек (8 боевых + Пояс + 2 кольца-заглушки);
+///   Сумка — носимые вещи сеткой 4 колонки (на сервере container='backpack');
+///   Пояс  — расходка с TTL (пока списком, сетка 5×2 — TD-C47).
+///
+/// Личный сундук вкладкой НЕ является: это отдельный контейнер (container='chest') и
+/// отдельная точка в городе. Panel_Chest и привязки к нему сохранены и рабочие, просто
+/// ни одна вкладка их не показывает — когда появится городской сундук, включать здесь
+/// заново ничего не придётся.
 ///
 /// View только отображает и зовёт команды Presenter. Логика — в InventoryPresenter.
 /// Иерархию собирает Editor/InventorySetup.cs.
@@ -22,7 +26,7 @@ public sealed class View_Inventory : DisposableBehaviour
 {
     [Header("Корень / шапка")]
     [SerializeField] private Button mButtonClose;
-    [SerializeField] private TMP_Text mLabelBackpackCount;   // «Рюкзак: 12/15»
+    [SerializeField] private TMP_Text mLabelBackpackCount;   // «Сумка: 12/15»
     [SerializeField] private GameObject mSpinner;
 
     [Header("Вкладки")]
@@ -30,22 +34,26 @@ public sealed class View_Inventory : DisposableBehaviour
     [SerializeField] private Button mTabButtonPrefab;     // Button с TMP_Text-потомком
 
     [Header("Контент-панели вкладок")]
-    [SerializeField] private GameObject mPanelEquipment;
-    [SerializeField] private GameObject mPanelChest;
-    [SerializeField] private GameObject mPanelEffects;
+    [SerializeField] private GameObject mPanelHero;
+    [SerializeField] private GameObject mPanelBag;
+    [SerializeField] private GameObject mPanelBelt;
     [SerializeField] private GameObject mPanelPlaceholder;
     [SerializeField] private TMP_Text mLabelPlaceholder;
 
-    [Header("Снаряжение")]
+    [Header("Герой (кукла)")]
     [SerializeField] private EquipSlotView[] mEquipSlots;    // фиксированные слоты (по SlotKey)
+
+    [Header("Сумка")]
     [SerializeField] private Transform mBackpackContainer;
     [SerializeField] private InventoryItemSlotView mItemSlotPrefab;
+    [SerializeField] private GameObject mBagEmptyHint;       // «Сумка пуста»
 
-    [Header("Сундук")]
+    [Header("Сундук (вне вкладок — городской, см. класс-комментарий)")]
+    [SerializeField] private GameObject mPanelChest;
     [SerializeField] private Transform mChestContainer;
     [SerializeField] private GameObject mChestUnavailableHint;  // «Сундук недоступен здесь»
 
-    [Header("Эффекты (расходка)")]
+    [Header("Пояс (расходка)")]
     [SerializeField] private Transform mStacksContainer;
     [SerializeField] private ConsumableStackItemView mStackRowPrefab;
     [SerializeField] private GameObject mStacksEmptyHint;
@@ -140,7 +148,7 @@ public sealed class View_Inventory : DisposableBehaviour
         {
             var text = ReactiveExtensions.Combine(
                 mPresenter.BackpackUsed, mPresenter.BackpackCapacity,
-                (used, cap) => $"Рюкзак: {used}/{cap}",
+                (used, cap) => $"Сумка: {used}/{cap}",
                 this);
             mLabelBackpackCount.SetTextSource(text).DisposeWhenLifeEnded(this);
         }
@@ -176,19 +184,19 @@ public sealed class View_Inventory : DisposableBehaviour
 
         bool placeholder = InventoryTabInfo.IsPlaceholder(tab);
 
-        SetActive(mPanelEquipment, tab == InventoryTab.Equipment);
-        SetActive(mPanelChest, tab == InventoryTab.Chest);
-        SetActive(mPanelEffects, tab == InventoryTab.Effects);
+        SetActive(mPanelHero, tab == InventoryTab.Hero);
+        SetActive(mPanelBag, tab == InventoryTab.Bag);
+        SetActive(mPanelBelt, tab == InventoryTab.Belt);
         SetActive(mPanelPlaceholder, placeholder);
+
+        // Сундук вкладкой не является — держим скрытым всегда (см. класс-комментарий).
+        SetActive(mPanelChest, false);
 
         if (placeholder && mLabelPlaceholder != null)
             mLabelPlaceholder.text = InventoryTabInfo.PlaceholderText(tab);
-
-        if (tab == InventoryTab.Chest)
-            RefreshChestAvailabilityHint();
     }
 
-    // ─── Снаряжение ───────────────────────────────────────────────────────────
+    // ─── Герой (кукла) ────────────────────────────────────────────────────────
 
     private void RebuildEquipped(List<InventoryItemDto> equipped)
     {
@@ -221,12 +229,17 @@ public sealed class View_Inventory : DisposableBehaviour
         }
     }
 
+    // ─── Сумка ────────────────────────────────────────────────────────────────
+
     private void RebuildBackpack(List<InventoryItemDto> backpack)
     {
         RebuildItemList(backpack, mBackpackContainer, mBackpackItems);
+
+        if (mBagEmptyHint != null)
+            mBagEmptyHint.SetActive(backpack == null || backpack.Count == 0);
     }
 
-    // ─── Сундук ───────────────────────────────────────────────────────────────
+    // ─── Сундук (пока не показывается ни одной вкладкой) ──────────────────────
 
     private void RebuildChest(List<InventoryItemDto> chest)
     {
@@ -242,7 +255,7 @@ public sealed class View_Inventory : DisposableBehaviour
             mChestContainer.gameObject.SetActive(available);
     }
 
-    // ─── Эффекты ──────────────────────────────────────────────────────────────
+    // ─── Пояс (расходка) ──────────────────────────────────────────────────────
 
     private void RebuildStacks(List<ConsumableStackDto> stacks)
     {

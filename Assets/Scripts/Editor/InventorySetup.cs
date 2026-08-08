@@ -11,11 +11,26 @@ using TMPro;
 /// Запуск: MMORPG → Setup → Inventory Panel
 ///
 /// Создаёт:
-///   Panel_Inventory (View_Inventory) с вкладками, снаряжением, рюкзаком, сундуком, эффектами;
+///   Panel_Inventory (View_Inventory) с вкладками Герой / Сумка / Пояс;
+///   Panel_Chest — городской сундук, собран, но вкладкой не показывается (см. ниже);
 ///   Popup_ItemDetail (детали + действия);
-///   (Popup_Confirm убран — подтверждения теперь через сервис уведомлений);
 ///   префабы Item_InvSlot / Item_StackRow / Button_Tab (в скрытом контейнере шаблонов).
 /// Назначает ВСЕ SerializeField через SerializedObject и проставляет ссылки в GameInstaller.
+///
+/// РАСКЛАДКА (приведена к mockup_inventory_v5, закрывает TD-C46):
+///   — «Герой» — только кукла. Рюкзака здесь больше нет.
+///   — «Сумка» — сетка 4 колонки в собственном скролле на всю страницу.
+///     Раньше кукла и Scroll_Backpack делили высоту одной VerticalLayoutGroup:
+///     кукла заявляла большой preferred-размер, ScrollRect — фактически нулевой,
+///     и рюкзак схлопывался в полоску высотой в пару пикселей. Разнесение по
+///     вкладкам убирает конкуренцию за высоту вместе с причиной, а не симптомом.
+///   — «Пояс» — расходка списком (сетка 5×2 с замками остаётся за TD-C47).
+///   — Сундук — отдельный контейнер сервера (container='chest') и точка в городе,
+///     не раздел инвентаря. Панель и привязки живые, показ включится вместе с
+///     городским сундуком.
+///
+/// РАЗРЕШЕНИЕ: размеры рассчитаны на Reference Resolution 1080×1920, Match = 0 (по ширине).
+/// Проверь Canvas Scaler перед запуском — иначе сетка сумки уедет по ширине.
 ///
 /// После запуска — проверь Console и удали скрипт.
 /// </summary>
@@ -25,6 +40,12 @@ public static class InventorySetup
     private static readonly Color SubPanelBg = new(0.12f, 0.12f, 0.15f, 1f);
     private static readonly Color ButtonBg = new(0.22f, 0.22f, 0.26f);
     private static readonly Color SlotBg = new(0.16f, 0.16f, 0.20f);
+
+    // Сетка сумки под референс 1080 по ширине:
+    //   1080 − 2×20 (боковой паддинг панели) − 2×12 (паддинг вкладки) − 3×8 (спейсинг) = 992
+    //   992 / 4 ≈ 248 → берём 240 с запасом на скроллбар.
+    private const int BAG_COLUMNS = 4;
+    private static readonly Vector2 BagCell = new(240, 240);
 
     [MenuItem("MMORPG/Setup/Inventory Panel")]
     public static void CreateInventoryPanel()
@@ -39,6 +60,8 @@ public static class InventorySetup
             Debug.LogError("[InventorySetup] Canvas (Screen Space Overlay) не найден. Открой Game-сцену.");
             return;
         }
+
+        WarnIfCanvasScalerMismatch(rootCanvas);
 
         Transform safeArea = rootCanvas.transform.Find("SafeArea") ?? rootCanvas.transform;
 
@@ -87,7 +110,7 @@ public static class InventorySetup
         float msgY = tabsY + tabsH + gap;
         float contentTopInset = msgY + msgH + gap;
 
-        // Шапка: заголовок + рюкзак-счётчик + закрыть (top-anchored, фикс. высота)
+        // Шапка: заголовок + счётчик сумки + закрыть (top-anchored, фикс. высота)
         var header = MakeTopBar("Panel_Header", panel.transform, headerY, headerH, padSide);
         var headerHlg = header.gameObject.AddComponent<HorizontalLayoutGroup>();
         headerHlg.spacing = 10;
@@ -97,7 +120,7 @@ public static class InventorySetup
         headerHlg.childForceExpandWidth = true;
         headerHlg.childForceExpandHeight = true;
         MakeLabel("Label_Title", header.transform, "Инвентарь", 26);
-        var lblBackpack = MakeLabel("Label_Backpack", header.transform, "Рюкзак: 0/0", 20);
+        var lblBackpack = MakeLabel("Label_Backpack", header.transform, "Сумка: 0/0", 20);
         var btnClose = MakeButton("Button_Close", header.transform, "✕", fixedWidth: 80, height: 56);
 
         // Вкладки (top-anchored, фикс. высота, сразу под шапкой)
@@ -119,23 +142,44 @@ public static class InventorySetup
         var contentRt = MakeFillBelow("Panel_Content", panel.transform, contentTopInset, padSide, padBottom);
         var content = contentRt.gameObject;
 
-        // ── Вкладка «Снаряжение» ──────────────────────────────────────────────
-        var panelEquip = MakeStretchPanel("Panel_Equipment", content.transform, SubPanelBg);
-        var equipVlg = panelEquip.AddComponent<VerticalLayoutGroup>();
-        equipVlg.padding = new RectOffset(12, 12, 12, 12);
-        equipVlg.spacing = 8;
-        equipVlg.childControlWidth = true;
-        equipVlg.childForceExpandWidth = true;
-        equipVlg.childControlHeight = true;
+        // ── Вкладка «Герой» ───────────────────────────────────────────────────
+        // Кукла и ничего кроме неё. Скролл на всю страницу — статы (TD, ниже куклы)
+        // добавятся сюда же и не будут ни с кем делить высоту.
+        var panelHero = MakeStretchPanel("Panel_Hero", content.transform, SubPanelBg);
+        var heroScroll = MakeScrollList("Scroll_Hero", panelHero.transform, out var heroContent, controlChildHeight: true);
+        MakeStretchRT(heroScroll);   // скролл занимает всю вкладку, без layout-группы поверх
 
-        MakeLabel("Label_EquipHeader", panelEquip.transform, "Надето", 20);
-        var equipSlots = InventoryDollBuilder.Build(panelEquip.transform);
+        MakeLabel("Label_EquipHeader", heroContent, "Надето", 20);
+        var equipSlots = InventoryDollBuilder.Build(heroContent);
 
+        // ── Вкладка «Сумка» ───────────────────────────────────────────────────
+        // Сетка 4 колонки в собственном скролле. GridLayoutGroup сам задаёт размер
+        // ячеек, поэтому LayoutElement на префабе Item_InvSlot здесь игнорируется —
+        // это ожидаемо, а не забытая настройка.
+        var panelBag = MakeStretchPanel("Panel_Bag", content.transform, SubPanelBg);
+        panelBag.SetActive(false);
+        var bagScroll = MakeScrollGrid("Scroll_Bag", panelBag.transform, BagCell, BAG_COLUMNS, out var bagContent);
+        MakeStretchRT(bagScroll);
 
-        MakeLabel("Label_BackpackHeader", panelEquip.transform, "Рюкзак", 20);
-        var backpackScroll = MakeScrollList("Scroll_Backpack", panelEquip.transform, out var backpackContent);
+        var bagEmpty = MakeCenteredHint("Label_BagEmpty", panelBag.transform, "Сумка пуста.");
 
-        // ── Вкладка «Сундук» ──────────────────────────────────────────────────
+        // ── Вкладка «Пояс» ────────────────────────────────────────────────────
+        var panelBelt = MakeStretchPanel("Panel_Belt", content.transform, SubPanelBg);
+        panelBelt.SetActive(false);
+        var beltVlg = panelBelt.AddComponent<VerticalLayoutGroup>();
+        beltVlg.padding = new RectOffset(12, 12, 12, 12);
+        beltVlg.spacing = 8;
+        beltVlg.childControlWidth = true;
+        beltVlg.childForceExpandWidth = true;
+        beltVlg.childControlHeight = true;
+
+        MakeLabel("Label_BeltHeader", panelBelt.transform, "Расходка", 20);
+        var stacksEmpty = MakeLabel("Label_StacksEmpty", panelBelt.transform, "Нет расходки.", 18).gameObject;
+        var beltScroll = MakeScrollList("Scroll_Belt", panelBelt.transform, out var stacksContent);
+
+        // ── Сундук (собран, но вкладкой не показывается) ──────────────────────
+        // Городской сундук — отдельный контейнер сервера. Панель и привязки живые,
+        // чтобы при появлении точки в городе не пересобирать иерархию заново.
         var panelChest = MakeStretchPanel("Panel_Chest", content.transform, SubPanelBg);
         panelChest.SetActive(false);
         var chestVlg = panelChest.AddComponent<VerticalLayoutGroup>();
@@ -150,21 +194,7 @@ public static class InventorySetup
             "Сундук недоступен в этой локации.", 18).gameObject;
         var chestScroll = MakeScrollList("Scroll_Chest", panelChest.transform, out var chestContent);
 
-        // ── Вкладка «Эффекты» ─────────────────────────────────────────────────
-        var panelEffects = MakeStretchPanel("Panel_Effects", content.transform, SubPanelBg);
-        panelEffects.SetActive(false);
-        var effVlg = panelEffects.AddComponent<VerticalLayoutGroup>();
-        effVlg.padding = new RectOffset(12, 12, 12, 12);
-        effVlg.spacing = 8;
-        effVlg.childControlWidth = true;
-        effVlg.childForceExpandWidth = true;
-        effVlg.childControlHeight = true;
-
-        MakeLabel("Label_EffectsHeader", panelEffects.transform, "Расходка", 20);
-        var stacksEmpty = MakeLabel("Label_StacksEmpty", panelEffects.transform, "Нет расходки.", 18).gameObject;
-        var effectsScroll = MakeScrollList("Scroll_Effects", panelEffects.transform, out var stacksContent);
-
-        // ── Вкладка-заглушка (Ресурсы/Квесты) ─────────────────────────────────
+        // ── Вкладка-заглушка (на будущие «Питомцы» / «Коллекции») ─────────────
         var panelPlaceholder = MakeStretchPanel("Panel_Placeholder", content.transform, SubPanelBg);
         panelPlaceholder.SetActive(false);
         var lblPlaceholder = MakeLabel("Label_Placeholder", panelPlaceholder.transform, "Пока пусто.", 20);
@@ -189,8 +219,14 @@ public static class InventorySetup
         // ── Popup_ItemDetail ──────────────────────────────────────────────────
         var detailGo = MakeStretchPanel("Popup_ItemDetail", safeArea, new Color(0.06f, 0.06f, 0.09f, 0.98f));
         detailGo.AddComponent<RectMask2D>();
-        detailGo.SetActive(false);
+        // НЕ выключаем здесь: Awake не вызывается на выключенном GameObject, и тогда
+        // Popup_ItemDetail.SafeAwake не отработает — не встанет подписка на SelectedItem,
+        // и попап уже никогда не сможет себя показать (тап по вещи «ничего не делает»).
+        // Попап сам прячет себя в конце SafeAwake. Та же причина, что и у Panel_Inventory выше.
         var detail = detailGo.AddComponent<Popup_ItemDetail>();
+        // Попап рисуется поверх инвентаря: uGUI отрисовывает сиблингов по порядку,
+        // и без этого он может оказаться под Panel_Inventory — открытым, но невидимым.
+        detailGo.transform.SetAsLastSibling();
 
         var detailVlg = detailGo.AddComponent<VerticalLayoutGroup>();
         detailVlg.padding = new RectOffset(40, 40, 60, 40);
@@ -240,9 +276,9 @@ public static class InventorySetup
             so.FindProperty("mTabsContainer").objectReferenceValue = tabsRow.transform;
             so.FindProperty("mTabButtonPrefab").objectReferenceValue = tabButtonPrefab;
 
-            so.FindProperty("mPanelEquipment").objectReferenceValue = panelEquip;
-            so.FindProperty("mPanelChest").objectReferenceValue = panelChest;
-            so.FindProperty("mPanelEffects").objectReferenceValue = panelEffects;
+            so.FindProperty("mPanelHero").objectReferenceValue = panelHero;
+            so.FindProperty("mPanelBag").objectReferenceValue = panelBag;
+            so.FindProperty("mPanelBelt").objectReferenceValue = panelBelt;
             so.FindProperty("mPanelPlaceholder").objectReferenceValue = panelPlaceholder;
             so.FindProperty("mLabelPlaceholder").objectReferenceValue = lblPlaceholder;
 
@@ -251,9 +287,11 @@ public static class InventorySetup
             for (int i = 0; i < equipSlots.Count; i++)
                 slotsProp.GetArrayElementAtIndex(i).objectReferenceValue = equipSlots[i];
 
-            so.FindProperty("mBackpackContainer").objectReferenceValue = backpackContent;
+            so.FindProperty("mBackpackContainer").objectReferenceValue = bagContent;
             so.FindProperty("mItemSlotPrefab").objectReferenceValue = itemSlotPrefab;
+            so.FindProperty("mBagEmptyHint").objectReferenceValue = bagEmpty;
 
+            so.FindProperty("mPanelChest").objectReferenceValue = panelChest;
             so.FindProperty("mChestContainer").objectReferenceValue = chestContent;
             so.FindProperty("mChestUnavailableHint").objectReferenceValue = chestUnavailable;
 
@@ -306,14 +344,40 @@ public static class InventorySetup
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
             UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
 
-        Debug.Log("[InventorySetup] ✅ Готово! Panel_Inventory + Popup_ItemDetail созданы.\n" +
+        Debug.Log("[InventorySetup] ✅ Готово! Panel_Inventory (Герой / Сумка / Пояс) + Popup_ItemDetail созданы.\n" +
                   "Осталось вручную:\n" +
                   "  1. Поставь Panel_Inventory НИЖЕ Panel_Combat в иерархии (или меньший Sort Order),\n" +
                   "     чтобы бой перекрывал инвентарь.\n" +
                   "  2. Добавь кнопки «Инвентарь» на Panel_LocationMain и Panel_Hunting и привяжи их к\n" +
                   "     mInventoryButton (View_Location) / mButtonInventory (View_Hunting) — см. предупреждения ниже.\n" +
-                  "  3. Сохрани сцену (Ctrl+S).\n" +
-                  "  4. Удали Assets/Editor/InventorySetup.cs");
+                  "  3. Game view: 1080×1920 Portrait. Canvas Scaler: Scale With Screen Size,\n" +
+                  "     Reference 1080×1920, Match = 0 (по ширине).\n" +
+                  "  4. Сохрани сцену (Ctrl+S).\n" +
+                  "  5. Удали Assets/Editor/InventorySetup.cs");
+    }
+
+    /// <summary>
+    /// Предупреждает, если Canvas Scaler настроен не под референс 1080×1920 по ширине.
+    /// Размеры сетки сумки посчитаны под этот референс — при других настройках ячейки
+    /// не сойдутся по ширине, и это будет выглядеть как «баг вёрстки».
+    /// </summary>
+    private static void WarnIfCanvasScalerMismatch(Canvas canvas)
+    {
+        var scaler = canvas.GetComponent<CanvasScaler>();
+        if (scaler == null)
+        {
+            Debug.LogWarning("[InventorySetup] На Canvas нет CanvasScaler — сетка сумки рассчитана на 1080 по ширине.");
+            return;
+        }
+
+        if (scaler.uiScaleMode != CanvasScaler.ScaleMode.ScaleWithScreenSize)
+            Debug.LogWarning("[InventorySetup] CanvasScaler.uiScaleMode ≠ ScaleWithScreenSize — раскладка поедет между разрешениями.");
+
+        if (!Mathf.Approximately(scaler.referenceResolution.x, 1080f))
+            Debug.LogWarning($"[InventorySetup] Reference Resolution по ширине = {scaler.referenceResolution.x}, ожидалось 1080. Сетка сумки рассчитана под 1080.");
+
+        if (!Mathf.Approximately(scaler.matchWidthOrHeight, 0f))
+            Debug.LogWarning($"[InventorySetup] Match = {scaler.matchWidthOrHeight}, ожидалось 0 (по ширине). При других значениях портретная вёрстка съезжает на высоких экранах.");
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -335,6 +399,14 @@ public static class InventorySetup
         if (prop == null)
         {
             Debug.LogWarning($"[InventorySetup] Поле {fieldName} в {typeof(T).Name} не найдено.");
+            return;
+        }
+
+        // Идемпотентность: если поле уже назначено, не создаём вторую кнопку —
+        // старая осталась бы в иерархии, но перестала быть привязанной (TD-C48).
+        if (prop.objectReferenceValue != null)
+        {
+            Debug.Log($"[InventorySetup] {typeof(T).Name}.{fieldName} уже назначено — пропускаю.");
             return;
         }
 
@@ -360,6 +432,11 @@ public static class InventorySetup
             Debug.LogWarning("[InventorySetup] Поле mButtonInventory в View_Hunting не найдено.");
             return;
         }
+        if (prop.objectReferenceValue != null)
+        {
+            Debug.Log("[InventorySetup] View_Hunting.mButtonInventory уже назначено — пропускаю.");
+            return;
+        }
         var btn = MakeButton("Button_OpenInventory_Hunt", hunting.transform, "Инвентарь", height: 64);
         prop.objectReferenceValue = btn;
         so.ApplyModifiedProperties();
@@ -370,6 +447,11 @@ public static class InventorySetup
     // Префабы списков
     // ════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Ячейка предмета. Используется и в сетке сумки (GridLayoutGroup задаёт размер сам),
+    /// и в вертикальных списках. Поэтому подписи выровнены по центру, а не по левому
+    /// краю: в квадратной ячейке 240×240 левое выравнивание смотрится съехавшим.
+    /// </summary>
     private static InventoryItemSlotView MakeItemSlotPrefab(Transform parent)
     {
         var go = new GameObject("Item_InvSlot", typeof(RectTransform));
@@ -385,16 +467,15 @@ public static class InventorySetup
         inner.GetComponent<RectTransform>().offsetMax = new Vector2(-3, -3);
         var innerVlg = inner.AddComponent<VerticalLayoutGroup>();
         innerVlg.padding = new RectOffset(10, 10, 6, 6);
+        innerVlg.childAlignment = TextAnchor.MiddleCenter;
         innerVlg.childControlWidth = true;
         innerVlg.childForceExpandWidth = true;
         innerVlg.childControlHeight = false;
 
         var btn = go.AddComponent<Button>();
         var name = MakeLabel("Label_Name", inner.transform, "Предмет", 18);
-        name.alignment = TextAlignmentOptions.Left;
         name.overflowMode = TextOverflowModes.Ellipsis;
         var sub = MakeLabel("Label_Sub", inner.transform, "ур.1 • 0/0", 14);
-        sub.alignment = TextAlignmentOptions.Left;
         sub.color = new Color(0.7f, 0.7f, 0.7f);
 
         var broken = MakeStretchPanel("Broken_Overlay", go.transform, new Color(0.6f, 0, 0, 0.35f));
@@ -467,51 +548,6 @@ public static class InventorySetup
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Слоты экипировки
-    // ════════════════════════════════════════════════════════════════════════
-
-    private static EquipSlotView MakeEquipSlot(Transform parent, string slotKey, string title, bool placeholder)
-    {
-        var go = new GameObject($"Slot_{slotKey}", typeof(RectTransform));
-        go.transform.SetParent(parent, false);
-        go.GetComponent<RectTransform>().sizeDelta = new Vector2(150, 70);
-
-        var frame = go.AddComponent<Image>();
-        frame.color = new Color(0.25f, 0.25f, 0.25f);
-
-        var inner = MakeStretchPanel("Inner", go.transform, SlotBg);
-        inner.GetComponent<RectTransform>().offsetMin = new Vector2(3, 3);
-        inner.GetComponent<RectTransform>().offsetMax = new Vector2(-3, -3);
-        var innerVlg = inner.AddComponent<VerticalLayoutGroup>();
-        innerVlg.childControlWidth = true;
-        innerVlg.childForceExpandWidth = true;
-        innerVlg.childControlHeight = false;
-        innerVlg.childAlignment = TextAnchor.MiddleCenter;
-
-        var btn = go.AddComponent<Button>();
-
-        var slotLbl = MakeLabel("Label_Slot", inner.transform, title, 14);
-        slotLbl.color = new Color(0.6f, 0.6f, 0.6f);
-        var itemLbl = MakeLabel("Label_Item", inner.transform, placeholder ? "скоро" : "—", 16);
-        itemLbl.overflowMode = TextOverflowModes.Ellipsis;
-
-        var broken = MakeStretchPanel("Broken_Overlay", go.transform, new Color(0.6f, 0, 0, 0.35f));
-        broken.SetActive(false);
-
-        var view = go.AddComponent<EquipSlotView>();
-        var so = new SerializedObject(view);
-        so.FindProperty("mSlotKey").stringValue = slotKey;
-        so.FindProperty("mIsPlaceholder").boolValue = placeholder;
-        so.FindProperty("mButton").objectReferenceValue = btn;
-        so.FindProperty("mLabelSlot").objectReferenceValue = slotLbl;
-        so.FindProperty("mLabelItem").objectReferenceValue = itemLbl;
-        so.FindProperty("mRarityFrame").objectReferenceValue = frame;
-        so.FindProperty("mBrokenOverlay").objectReferenceValue = broken;
-        so.ApplyModifiedProperties();
-        return view;
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
     // Базовые хелперы (как в CombatSetup)
     // ════════════════════════════════════════════════════════════════════════
 
@@ -577,6 +613,27 @@ public static class InventorySetup
         return rt;
     }
 
+    /// <summary>Подсказка по центру панели («Сумка пуста») — поверх скролла, не в layout.</summary>
+    private static GameObject MakeCenteredHint(string name, Transform parent, string text)
+    {
+        var go = new GameObject(name, typeof(RectTransform));
+        go.transform.SetParent(parent, false);
+        var rt = go.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = new Vector2(600, 60);
+        var lbl = go.AddComponent<TextMeshProUGUI>();
+        lbl.text = text;
+        lbl.fontSize = 20;
+        lbl.color = new Color(0.6f, 0.6f, 0.6f);
+        lbl.alignment = TextAlignmentOptions.Center;
+        // Подсказка не должна перехватывать тап по ячейкам под ней.
+        lbl.raycastTarget = false;
+        go.SetActive(false);
+        return go;
+    }
+
     private static GameObject MakeHRow(string name, Transform parent, float height)
     {
         var go = new GameObject(name, typeof(RectTransform));
@@ -595,21 +652,52 @@ public static class InventorySetup
         return go;
     }
 
-    private static GameObject MakeGrid(string name, Transform parent, Vector2 cell, int cols)
+    /// <param name="controlChildHeight">
+    /// true — VerticalLayoutGroup сам задаёт высоту детей по их LayoutElement.
+    /// Нужно там, где ребёнок сообщает высоту через LayoutElement, а его RectTransform
+    /// пустой: например Panel_Doll. При false группа берёт высоту из sizeDelta, кукла
+    /// получает 0 и схлопывается — колонки съезжают вверх.
+    /// Для списков строк (расходка) оставляем false: у их префабов высота в sizeDelta.
+    /// </param>
+    private static GameObject MakeScrollList(string name, Transform parent, out Transform content,
+        bool controlChildHeight = false)
     {
-        var go = new GameObject(name, typeof(RectTransform));
-        go.transform.SetParent(parent, false);
-        var grid = go.AddComponent<GridLayoutGroup>();
-        grid.cellSize = cell;
-        grid.spacing = new Vector2(8, 8);
-        grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-        grid.constraintCount = cols;
-        var le = go.AddComponent<LayoutElement>();
-        le.preferredHeight = cell.y * 4 + 24;
+        var go = MakeScrollShell(name, parent, out var contentGo);
+
+        var vlg = contentGo.AddComponent<VerticalLayoutGroup>();
+        vlg.spacing = 6;
+        vlg.padding = new RectOffset(4, 4, 4, 4);
+        vlg.childAlignment = TextAnchor.UpperCenter;
+        vlg.childControlWidth = true;
+        vlg.childForceExpandWidth = true;
+        vlg.childControlHeight = controlChildHeight;
+        vlg.childForceExpandHeight = false;
+
+        content = contentGo.transform;
         return go;
     }
 
-    private static GameObject MakeScrollList(string name, Transform parent, out Transform content)
+    /// <summary>
+    /// Скролл с сеткой фиксированных ячеек (сумка). GridLayoutGroup сам задаёт размер
+    /// детей — LayoutElement на префабе ячейки здесь не работает, это ожидаемо.
+    /// </summary>
+    private static GameObject MakeScrollGrid(string name, Transform parent, Vector2 cell, int cols, out Transform content)
+    {
+        var go = MakeScrollShell(name, parent, out var contentGo);
+
+        var grid = contentGo.AddComponent<GridLayoutGroup>();
+        grid.cellSize = cell;
+        grid.spacing = new Vector2(8, 8);
+        grid.padding = new RectOffset(4, 4, 4, 4);
+        grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+        grid.constraintCount = cols;
+
+        content = contentGo.transform;
+        return go;
+    }
+
+    /// <summary>Общий каркас ScrollRect (viewport + content с ContentSizeFitter).</summary>
+    private static GameObject MakeScrollShell(string name, Transform parent, out GameObject contentGo)
     {
         var go = new GameObject(name, typeof(RectTransform));
         go.transform.SetParent(parent, false);
@@ -628,25 +716,17 @@ public static class InventorySetup
         // надёжнее на разных масштабах канваса/превью редактора, рекомендация Unity для ScrollRect.
         viewport.AddComponent<RectMask2D>();
 
-        var contentGo = new GameObject("Content", typeof(RectTransform));
+        contentGo = new GameObject("Content", typeof(RectTransform));
         contentGo.transform.SetParent(viewport.transform, false);
         var crt = contentGo.GetComponent<RectTransform>();
         crt.anchorMin = new Vector2(0, 1);
         crt.anchorMax = new Vector2(1, 1);
         crt.pivot = new Vector2(0.5f, 1);
-        var vlg = contentGo.AddComponent<VerticalLayoutGroup>();
-        vlg.spacing = 6;
-        vlg.padding = new RectOffset(4, 4, 4, 4);
-        vlg.childControlWidth = true;
-        vlg.childForceExpandWidth = true;
-        vlg.childControlHeight = false;
         var fitter = contentGo.AddComponent<ContentSizeFitter>();
         fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
         scroll.viewport = viewport.GetComponent<RectTransform>();
         scroll.content = crt;
-
-        content = contentGo.transform;
         return go;
     }
 

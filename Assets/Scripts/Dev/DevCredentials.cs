@@ -6,8 +6,8 @@
 /// </summary>
 public static class DevCredentials
 {
-    public const string EMAIL    = "client.admin@test.local";
-    public const string PASSWORD = "ClawsAdmin2026!";
+    public const string EMAIL    = "client.dev@test.local";
+    public const string PASSWORD = "DevPass2026!";
 }
 #endif
 

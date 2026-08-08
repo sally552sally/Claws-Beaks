@@ -223,8 +223,10 @@ public static class InventoryOps
             return false;
         }
 
-        // Переключим вкладку на сундук, чтобы игрок видел его в UI.
-        ctx.Inventory.SelectTab(InventoryTab.Chest);
+        // Сундук вкладкой инвентаря не является (см. InventoryTab) — это отдельный
+        // контейнер сервера и точка в городе. Грузим его данные явно, чтобы
+        // реактивное состояние презентора было заполнено к моменту мутаций.
+        ctx.Inventory.LoadChest();
         return true;
     }
 }
